@@ -1,46 +1,85 @@
 "use client";
 
-import { LogOut, ShieldCheck } from "lucide-react";
-import { useSession } from "@/components/providers";
-import { Avatar, Chip } from "@/components/ui/primitives";
+import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import {
+  AlertTriangle, Bell, Bot, Check, Globe, KeyRound, Laptop, Lock, LogOut,
+  Palette, ShieldCheck, Sliders, Smartphone, Trash2, Upload, User,
+  type LucideIcon,
+} from "lucide-react";
+
+type Tab = "account" | "privacy" | "notifications" | "appearance" | "ai" | "security";
+
+const tabs: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
+  { id: "account", label: "Account & Profile", icon: User },
+  { id: "privacy", label: "Privacy & Safety", icon: ShieldCheck },
+  { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "appearance", label: "Appearance & Display", icon: Palette },
+  { id: "ai", label: "Groq AI Preferences", icon: Bot },
+  { id: "security", label: "Security & Logins", icon: KeyRound },
+];
+
+const glass = "rounded-2xl border border-slate-300/80 bg-slate-100/80 p-5 shadow-xl shadow-slate-300/50 backdrop-blur-xl transition-all duration-200 hover:border-slate-300 hover:bg-slate-200/60 dark:border-zinc-800/80 dark:bg-zinc-900/60 dark:shadow-none dark:hover:border-zinc-700 dark:hover:bg-zinc-900/60 sm:p-6";
+const input = "w-full rounded-xl border border-slate-300/60 bg-slate-200/80 px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition placeholder:text-zinc-500 focus:border-violet-500 focus:bg-slate-100 focus:ring-2 focus:ring-violet-500/20 dark:border-zinc-700/60 dark:bg-zinc-800/50 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:bg-zinc-800/50";
+
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
+  return <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${checked ? "bg-violet-600" : "bg-zinc-700"}`}><span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${checked ? "translate-x-5" : "translate-x-0"}`} /></button>;
+}
+
+function PageHeading({ icon: Icon, title, description }: { icon: LucideIcon; title: string; description: string }) {
+  return <div className="mb-6 flex gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-600/15 text-violet-400"><Icon size={19} /></span><div><h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">{title}</h2><p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{description}</p></div></div>;
+}
+
+function Row({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return <div className="flex flex-col gap-3 py-5 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{title}</h3><p className="mt-1 max-w-md text-sm text-zinc-500 dark:text-zinc-400">{description}</p></div><div className="shrink-0">{children}</div></div>;
+}
 
 export default function SettingsPage() {
-  const { me, signOut } = useSession();
+  const [tab, setTab] = useState<Tab>("account");
+  const [toast, setToast] = useState(false);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [avatar, setAvatar] = useState<string | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+  const [profile, setProfile] = useState({ name: "Aarav Mehta", username: "aaravmehta", bio: "Building thoughtful things for campus communities.", school: "Indian Institute of Technology, Delhi", phone: "+91 98765 43210" });
+  const [settings, setSettings] = useState<Record<string, boolean>>({ private: false, discovery: true, connections: true, events: true, polls: true, social: true, reducedMotion: false, sharpening: true, ranking: true, twoFactor: false });
+  const [dmAudience, setDmAudience] = useState("Everyone");
+  const [mentions, setMentions] = useState("Everyone");
+  const [digest, setDigest] = useState("Weekly Summary");
+  const [theme, setTheme] = useState("dark");
+  const [accent, setAccent] = useState("#7c3aed");
+  const [model, setModel] = useState("Llama-3.3-70b");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  if (!me) return null;
+  const save = () => { setToast(true); if (toastTimer.current) clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(false), 2600); };
+  const toggle = (key: string, value: boolean) => { setSettings((old) => ({ ...old, [key]: value })); save(); };
+  const setImage = (event: ChangeEvent<HTMLInputElement>, setter: (image: string) => void) => { const image = event.target.files?.[0]; if (image) { setter(URL.createObjectURL(image)); save(); } };
+  const select = (setter: (value: string) => void, value: string) => { setter(value); save(); };
+  const picker = (value: string, setter: (value: string) => void, options: string[]) => <div className="flex flex-wrap gap-2">{options.map((option) => <button type="button" key={option} onClick={() => select(setter, option)} className={`rounded-xl border px-3 py-2 text-sm transition ${value === option ? "border-violet-500 bg-violet-600/15 text-violet-400" : "border-zinc-200 text-zinc-500 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"}`}>{option}</button>)}</div>;
 
-  return (
-    <div className="space-y-4">
-      <h1 className="font-display text-2xl font-bold">Settings</h1>
+  return <main className="max-w-6xl mx-auto px-4 py-8">
+    <header className="mb-7"><p className="text-sm font-medium text-violet-400">Personal workspace</p><h1 className="mt-1 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Settings</h1><p className="mt-2 text-zinc-500 dark:text-zinc-400">Shape Motion around the way you connect, create, and focus.</p></header>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+      <aside className="lg:col-span-4"><nav className="flex gap-2 overflow-x-auto pb-1 lg:sticky lg:top-6 lg:flex-col lg:overflow-visible">{tabs.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => setTab(id)} className={`flex shrink-0 items-center gap-3 rounded-xl border px-4 py-3 text-left text-sm transition lg:w-full ${tab === id ? "border-violet-500 border-l-2 bg-violet-600/15 font-medium text-violet-400 dark:bg-violet-600/15" : "border-slate-300/80 bg-slate-100/80 text-zinc-600 hover:bg-slate-200/60 hover:text-zinc-900 dark:border-zinc-800/80 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:bg-zinc-800/50 dark:hover:text-zinc-100"}`}><Icon size={17} />{label}</button>)}</nav></aside>
+      <section className="lg:col-span-8">
+        {tab === "account" && <div className={glass}><PageHeading icon={User} title="Account & Profile" description="Manage the identity people see across Motion." />
+          <div className="grid gap-4 sm:grid-cols-2"><Uploader title="Profile photo" preview={avatar} circular onChange={(event) => setImage(event, setAvatar)} /><Uploader title="Profile banner" preview={banner} onChange={(event) => setImage(event, setBanner)} /></div>
+          <div className="mt-6 grid gap-4 sm:grid-cols-2"><Field label="Display name"><input className={input} value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></Field><Field label="Username"><div className="relative"><span className="absolute left-3.5 top-2.5 text-zinc-400">@</span><input className={`${input} pl-7`} value={profile.username} onChange={(e) => setProfile({ ...profile, username: e.target.value })} /></div></Field><div className="sm:col-span-2"><Field label="Bio"><textarea className={`${input} min-h-24 resize-y`} value={profile.bio} onChange={(e) => setProfile({ ...profile, bio: e.target.value })} /></Field></div><Field label="Campus / School"><input className={input} value={profile.school} onChange={(e) => setProfile({ ...profile, school: e.target.value })} /></Field><Field label="Phone"><input className={input} value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} /></Field><Field label="Email"><input className={`${input} cursor-not-allowed opacity-60`} value="aarav@iitd.ac.in" disabled /></Field><div><p className="mb-1.5 text-sm font-medium text-zinc-900 dark:text-zinc-100">Account type</p><span className="rounded-full border border-violet-500/40 bg-violet-600/15 px-3 py-1 text-sm font-medium text-violet-400">Student</span></div></div><Save onClick={save} /></div>}
 
-      <section className="glass flex items-center gap-4 p-5">
-        <Avatar user={me} size={64} ring />
-        <div className="flex-1">
-          <p className="font-display text-lg font-bold">{me.name}</p>
-          <p className="text-sm text-mist">@{me.handle} · {me.school}</p>
-          <div className="mt-2 flex gap-2">
-            <Chip tone={me.ageTag === "18+" ? "ice" : "gold"}>{me.ageTag}</Chip>
-            {me.skills.slice(0, 3).map((s) => (
-              <Chip key={s}>{s}</Chip>
-            ))}
-          </div>
-        </div>
+        {tab === "privacy" && <div className={glass}><PageHeading icon={ShieldCheck} title="Privacy & Safety" description="Control who can find you and how they interact with you." /><div className="divide-y divide-zinc-200 dark:divide-zinc-800"><Row title="Private account" description="Only approved connections can see your profile and posts."><Toggle checked={settings.private} onChange={(v) => toggle("private", v)} label="Private account" /></Row><Row title="Campus discovery" description="Allow users from your campus to find you by email or school."><Toggle checked={settings.discovery} onChange={(v) => toggle("discovery", v)} label="Campus discovery" /></Row><Row title="Direct messages audience" description="Choose who can start a conversation with you.">{picker(dmAudience, setDmAudience, ["Everyone", "Connections Only", "No One"])}</Row><Row title="Tagging & mentions" description="Choose who can tag or mention you in posts.">{picker(mentions, setMentions, ["Everyone", "Connections", "Off"])}</Row><Row title="Muted accounts" description="Posts from muted accounts stay out of your feed."><button onClick={save} className="text-sm font-medium text-violet-400">Manage muted</button></Row><Row title="Blocked accounts" description="Blocked people cannot see your profile or contact you."><button onClick={save} className="text-sm font-medium text-violet-400">Manage blocked</button></Row></div></div>}
+
+        {tab === "notifications" && <div className={glass}><PageHeading icon={Bell} title="Notifications" description="Choose the signals that deserve your attention." /><div className="divide-y divide-zinc-200 dark:divide-zinc-800"><Row title="Connection requests & accepts" description="Know when your network grows."><Toggle checked={settings.connections} onChange={(v) => toggle("connections", v)} label="Connection notifications" /></Row><Row title="Event invitations & RSVPs" description="Updates from events you are invited to or attending."><Toggle checked={settings.events} onChange={(v) => toggle("events", v)} label="Event notifications" /></Row><Row title="Poll results & expiration alerts" description="Never miss the outcome of a conversation."><Toggle checked={settings.polls} onChange={(v) => toggle("polls", v)} label="Poll notifications" /></Row><Row title="Likes, comments & mentions" description="Replies and reactions to your work."><Toggle checked={settings.social} onChange={(v) => toggle("social", v)} label="Interaction notifications" /></Row><Row title="Email digest" description="A thoughtful summary delivered to your inbox."><select className={`${input} w-44`} value={digest} onChange={(e) => select(setDigest, e.target.value)}><option>Off</option><option>Daily Digest</option><option>Weekly Summary</option></select></Row></div></div>}
+
+        {tab === "appearance" && <div className={glass}><PageHeading icon={Palette} title="Appearance & Display" description="Fine-tune Motion's visual atmosphere." /><p className="mb-3 text-sm font-medium text-zinc-900 dark:text-zinc-100">Theme mode</p><div className="grid gap-3 sm:grid-cols-3">{[{ id: "dark", name: "Dark Mode", note: "Obsidian Glass", preview: "bg-zinc-900 border-zinc-700" }, { id: "light", name: "Light Mode", note: "Off-White Glass", preview: "bg-white border-zinc-200" }, { id: "system", name: "System Default", note: "Match your device", preview: "bg-gradient-to-br from-zinc-950 to-white border-zinc-400" }].map((item) => <button key={item.id} onClick={() => select(setTheme, item.id)} className={`rounded-2xl border p-3 text-left ${theme === item.id ? "border-violet-500 ring-2 ring-violet-500/25" : "border-zinc-200 dark:border-zinc-700"}`}><span className={`mb-5 block h-12 rounded-lg border ${item.preview}`} /><span className="block text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.name}</span><span className="mt-1 block text-xs text-zinc-500">{item.note}</span></button>)}</div><div className="mt-7 border-t border-zinc-200 pt-6 dark:border-zinc-800"><p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Accent color</p><p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">A personal spark across active controls.</p><div className="mt-3 flex gap-3">{["#7c3aed", "#06b6d4", "#10b981"].map((color) => <button aria-label={`Use ${color} accent`} key={color} onClick={() => select(setAccent, color)} style={{ backgroundColor: color }} className={`h-9 w-9 rounded-full border-2 ${accent === color ? "border-white ring-2 ring-violet-500 ring-offset-2 dark:ring-offset-zinc-900" : "border-transparent"}`} />)}</div></div><div className="mt-6 border-t border-zinc-200 pt-5 dark:border-zinc-800"><Row title="Low Spec / Performance Mode" description="Reduced motion and blur reduction for smoother performance."><Toggle checked={settings.reducedMotion} onChange={(v) => toggle("reducedMotion", v)} label="Performance mode" /></Row></div></div>}
+
+        {tab === "ai" && <div className={glass}><PageHeading icon={Bot} title="Groq AI Preferences" description="Choose how AI helps make your Motion experience sharper." /><div className="divide-y divide-zinc-200 dark:divide-zinc-800"><Row title="Automatic post sharpening suggestions" description="Get helpful edits before you share a post."><Toggle checked={settings.sharpening} onChange={(v) => toggle("sharpening", v)} label="Post sharpening suggestions" /></Row><Row title="Smart Feed Ranking via Groq AI" description="Prioritize posts likely to be most relevant to you."><Toggle checked={settings.ranking} onChange={(v) => toggle("ranking", v)} label="Smart feed ranking" /></Row><Row title="Default model" description="Used for AI-assisted writing and discovery."><select className={`${input} w-52`} value={model} onChange={(e) => select(setModel, e.target.value)}><option>Llama-3.3-70b</option><option>Mixtral-8x7b</option></select></Row></div></div>}
+
+        {tab === "security" && <div className={glass}><PageHeading icon={KeyRound} title="Security & Logins" description="Protect your account and manage trusted devices." /><div className="grid gap-3 sm:grid-cols-2"><Field label="Current password"><input className={input} type="password" /></Field><Field label="New password"><input className={input} type="password" /></Field><Field label="Confirm new password"><input className={input} type="password" /></Field></div><button onClick={save} className="mt-4 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-500">Update Password</button><div className="mt-7"><h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Active sessions</h3><div className="mt-3 space-y-2"><Session icon={Laptop} name="MacBook Pro" detail="Bengaluru, IN · Current session" /><Session icon={Smartphone} name="iPhone 15 Pro" detail="Active Now" /></div><button onClick={save} className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-violet-400"><LogOut size={15} />Log out of all other sessions</button></div><div className="mt-7 border-t border-zinc-200 pt-5 dark:border-zinc-800"><Row title="Two-factor authentication" description="Secure new sign-ins with Supabase Auth verification."><Toggle checked={settings.twoFactor} onChange={(v) => toggle("twoFactor", v)} label="Two factor authentication" /></Row></div><div className="mt-7 rounded-2xl border border-red-500/30 bg-red-500/5 p-5"><div className="flex gap-3"><AlertTriangle className="mt-0.5 text-red-400" size={19} /><div><h3 className="font-semibold text-red-500 dark:text-red-400">Danger Zone</h3><p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">These actions affect access to your Motion account.</p></div></div><div className="mt-5 flex flex-wrap gap-3"><button onClick={save} className="rounded-xl border border-red-500/40 px-3.5 py-2 text-sm font-medium text-red-500 hover:bg-red-500/10">Deactivate Account</button><button onClick={() => setConfirmDelete(true)} className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-3.5 py-2 text-sm font-medium text-white hover:bg-red-400"><Trash2 size={15} />Delete Account</button></div>{confirmDelete && <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-red-500/30 p-3"><span className="text-sm text-red-500">Delete permanently?</span><button onClick={() => { setConfirmDelete(false); save(); }} className="text-sm font-semibold text-red-500">Confirm delete</button><button onClick={() => setConfirmDelete(false)} className="text-sm text-zinc-500">Cancel</button></div>}</div></div>}
       </section>
-
-      <section className="glass p-5">
-        <h2 className="font-display flex items-center gap-2 text-lg font-bold">
-          <ShieldCheck size={18} className="text-ice" /> Safety
-        </h2>
-        <ul className="mt-3 space-y-2 text-sm text-mist">
-          <li>· Reporting is 3 taps: post menu → select reason → submit. The reported party is never notified.</li>
-          <li>· Message requests from non-connections stay silent until accepted.</li>
-          <li>· Connections between any age brackets are open and frictionless, like Instagram.</li>
-        </ul>
-      </section>
-
-      <button onClick={signOut} className="glass flex w-full items-center justify-center gap-2 p-4 text-sm font-semibold text-coral hover:border-coral/30">
-        <LogOut size={16} /> Sign out
-      </button>
     </div>
-  );
+    <div className={`fixed right-6 top-6 z-50 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-zinc-900 px-4 py-3 text-sm font-medium text-zinc-100 shadow-xl transition-all duration-300 ${toast ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-3 opacity-0"}`}><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400"><Check size={15} /></span>Settings saved successfully</div>
+  </main>;
 }
+
+function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="block space-y-1.5"><span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{label}</span>{children}</label>; }
+function Uploader({ title, preview, onChange, circular = false }: { title: string; preview: string | null; onChange: (event: ChangeEvent<HTMLInputElement>) => void; circular?: boolean }) { return <label className="flex min-h-36 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/70 p-4 text-center transition hover:border-violet-500/70 dark:border-zinc-700 dark:bg-zinc-950/20">{preview ? <img src={preview} alt={`${title} preview`} className={`h-20 w-full object-cover ${circular ? "w-20 rounded-full" : "rounded-xl"}`} /> : <><Upload className="mb-2 text-violet-400" size={21} /><span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{title}</span><span className="mt-1 text-xs text-zinc-500">Click to upload</span></>}<input className="hidden" type="file" accept="image/*" onChange={onChange} /></label>; }
+function Save({ onClick }: { onClick: () => void }) { return <div className="mt-6 flex justify-end border-t border-zinc-200 pt-5 dark:border-zinc-800"><button onClick={onClick} className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-500">Save changes</button></div>; }
+function Session({ icon: Icon, name, detail }: { icon: LucideIcon; name: string; detail: string }) { return <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 dark:border-zinc-800 dark:bg-zinc-950/20"><span className="rounded-lg bg-violet-600/15 p-2 text-violet-400"><Icon size={17} /></span><div><p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{name}</p><p className="text-xs text-zinc-500 dark:text-zinc-400">{detail}</p></div></div>; }

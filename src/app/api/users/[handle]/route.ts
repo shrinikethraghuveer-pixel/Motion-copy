@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { bad, hydratePost, json, requireUser, toPublicUser } from "@/lib/server";
+import { bad, hydratePost, json, requireUser, toPublicUser, withSettings } from "@/lib/server";
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ handle: string }> }) {
   const auth = await requireUser();
@@ -20,13 +20,24 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ handle: st
       .filter((c) => c.status === "accepted" && (c.requesterId === user.id || c.targetId === user.id))
       .map((c) => (c.requesterId === user.id ? c.targetId : c.requesterId))
   );
+  const connected = friendsOfUser.has(me.id);
+  const isSelf = user.id === me.id;
 
-  const highlights = db.posts.filter((p) => p.authorId === user.id && (p.type === "opportunity" || p.reposts.length > 2));
-  const groups = db.groups.filter((g) => g.members.some((m) => m.userId === user.id));
+  // Private accounts lock their content from everyone except connections; deactivated accounts lock from everyone.
+  const locked = !isSelf && (!!user.deactivatedAt || (withSettings(user).privateProfile && !connected));
+
+  const pubUser = toPublicUser(db, user, me.id);
+  // School can be hidden from non-connections.
+  if (!withSettings(user).showSchool && !isSelf && !connected) pubUser.school = "";
+
+  const shownPosts = locked ? [] : posts;
+  const highlights = shownPosts.filter((p) => p.type === "opportunity" || p.reposts.length > 2);
+  const groups = locked ? [] : db.groups.filter((g) => g.members.some((m) => m.userId === user.id));
 
   return NextResponse.json({
-    user: toPublicUser(db, user, me.id),
-    posts: posts.map((p) => hydratePost(db, p, me.id)),
+    user: pubUser,
+    locked,
+    posts: shownPosts.map((p) => hydratePost(db, p, me.id)),
     highlights: highlights.map((p) => hydratePost(db, p, me.id)),
     clubs: groups.map((g) => ({
       id: g.id,
@@ -37,7 +48,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ handle: st
     })),
     stats: {
       connections: friendsOfUser.size,
-      posts: posts.length,
+      posts: shownPosts.length,
       following: user.following.length,
     },
   });

@@ -36,6 +36,8 @@ async function ensureSeeded(): Promise<void> {
         posts: seedPosts(),
         groups: seedGroups(),
         notifications: seedNotifications(),
+        sessions: [],
+        loginEvents: [],
         reports: seedReports(),
       } satisfies DB,
       null,
@@ -47,13 +49,44 @@ async function ensureSeeded(): Promise<void> {
 export async function readDB(): Promise<DB> {
   await ensureSeeded();
   try {
-    return JSON.parse(await fs.readFile(DB_PATH, "utf8")) as DB;
+    return normalize(JSON.parse(await fs.readFile(DB_PATH, "utf8")) as DB);
   } catch {
     // Corrupt or mid-write file: rebuild the seed rather than crash the API.
     await fs.rm(DB_PATH, { force: true });
     await ensureSeeded();
-    return JSON.parse(await fs.readFile(DB_PATH, "utf8")) as DB;
+    return normalize(JSON.parse(await fs.readFile(DB_PATH, "utf8")) as DB);
   }
+}
+
+/** Sensible ages for demo users created before the age field existed. */
+const AGE_BY_HANDLE: Record<string, number> = {
+  mayacodes: 19,
+  "arjun.builds": 20,
+  zoedesigns: 17,
+  liamtech: 20,
+  priyacodes: 16,
+  samfilms: 17,
+  avawrites: 13,
+  noahlabs: 21,
+  "mia.makes": 16,
+  devdhillon: 20,
+  emmacreates: 16,
+  kaimotion: 19,
+};
+
+const AGE_BY_GRADE: Record<string, number> = { middle: 13, high: 16, college: 19 };
+
+/** Fill collections added after the store was first seeded (no rewrite needed). */
+function normalize(db: DB): DB {
+  db.sessions ??= [];
+  db.loginEvents ??= [];
+  // Backfill real ages so <18/18+ derives from age, not grade (high-schoolers can be 18+).
+  for (const u of db.users) {
+    if (typeof u.age !== "number" || u.age <= 0) {
+      u.age = AGE_BY_HANDLE[u.handle] ?? AGE_BY_GRADE[u.grade] ?? 16;
+    }
+  }
+  return db;
 }
 
 export async function writeDB(db: DB): Promise<void> {

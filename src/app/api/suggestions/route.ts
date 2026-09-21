@@ -1,4 +1,4 @@
-import { json, requireUser, toPublicUser } from "@/lib/server";
+import { json, requireUser, toPublicUser, withSettings } from "@/lib/server";
 import type { SuggestedUser } from "@/lib/schema";
 
 export async function GET() {
@@ -17,9 +17,16 @@ export async function GET() {
       .map((c) => (c.requesterId === me.id ? c.targetId : c.requesterId))
   );
 
+  const mySettings = withSettings(me);
   const suggestions: SuggestedUser[] = [];
   for (const u of db.users) {
     if (u.id === me.id || connectedIds.has(u.id) || pendingIds.has(u.id)) continue;
+    if (u.deactivatedAt) continue;
+    const uSettings = withSettings(u);
+    if (!uSettings.discoverable) continue;
+    // Blocked or muted (either direction) never surface as suggestions.
+    if (uSettings.blocked.includes(me.id) || mySettings.blocked.includes(u.id)) continue;
+    if (uSettings.muted.includes(me.id) || mySettings.muted.includes(u.id)) continue;
 
     // mutual connections: friends of mine who are connected to u
     let mutualCount = 0;
@@ -33,7 +40,7 @@ export async function GET() {
       if (mutual) mutualCount++;
     }
 
-    const sharedSkills = u.skills.filter((s) => me.skills.includes(s));
+    const sharedSkills = mySettings.personalizeSuggestions ? u.skills.filter((s) => me.skills.includes(s)) : [];
 
     if (mutualCount === 0 && sharedSkills.length === 0) continue;
     const mutualsLabel = mutualCount === 1 ? "1 mutual connection" : `${mutualCount} mutual connections`;
@@ -49,7 +56,15 @@ export async function GET() {
   // Fallback: if not enough algorithmic matches, surface most-recent active students
   if (suggestions.length < 3) {
     const extras = db.users
-      .filter((u) => u.id !== me.id && !connectedIds.has(u.id) && !pendingIds.has(u.id) && !suggestions.some((s) => s.user.id === u.id))
+      .filter((u) => {
+        if (u.id === me.id || u.deactivatedAt) return false;
+        if (connectedIds.has(u.id) || pendingIds.has(u.id)) return false;
+        if (suggestions.some((s) => s.user.id === u.id)) return false;
+        const us = withSettings(u);
+        if (!us.discoverable || us.blocked.includes(me.id) || mySettings.blocked.includes(u.id)) return false;
+        if (us.muted.includes(me.id) || mySettings.muted.includes(u.id)) return false;
+        return true;
+      })
       .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
       .slice(0, 4 - suggestions.length);
     for (const u of extras) {

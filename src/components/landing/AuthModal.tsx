@@ -10,10 +10,10 @@ import { DEMO_PASSWORD } from "@/lib/constants";
 
 const STEPS = ["Stage", "Interests", "Goal"] as const;
 
-const GRADES: Array<{ key: Grade; label: string; hint: string; tag: string }> = [
-  { key: "middle", label: "Middle School", hint: "Grades 6–8", tag: "<18" },
-  { key: "high", label: "High School", hint: "Grades 9–12", tag: "<18" },
-  { key: "college", label: "College", hint: "University / Undergrad", tag: "18+" },
+const GRADES: Array<{ key: Grade; label: string; hint: string }> = [
+  { key: "middle", label: "Middle School", hint: "Grades 6–8" },
+  { key: "high", label: "High School", hint: "Grades 9–12" },
+  { key: "college", label: "College", hint: "University / Undergrad" },
 ];
 
 export default function AuthModal({ onClose }: { onClose: () => void }) {
@@ -24,6 +24,11 @@ export default function AuthModal({ onClose }: { onClose: () => void }) {
   // signup state
   const [handle, setHandle] = useState("");
   const [grade, setGrade] = useState<Grade | null>(null);
+  const [age, setAge] = useState<string>("");
+  const ageNum = Number(age);
+  const ageValid = Number.isInteger(ageNum) && ageNum >= 10 && ageNum <= 30;
+  const previewTag = ageValid ? (ageNum >= 18 ? "18+" : "<18") : null;
+  const suggestedGrade: Grade | null = ageValid ? (ageNum <= 13 ? "middle" : ageNum <= 18 ? "high" : "college") : null;
   const [skills, setSkills] = useState<string[]>([]);
   const [goal, setGoal] = useState<Goal | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -41,7 +46,7 @@ export default function AuthModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      await post("/api/session", { mode: "signup", handle, grade, skills, goal });
+      await post("/api/session", { mode: "signup", handle, grade, age: ageNum, skills, goal });
       window.location.assign("/home"); // full navigation picks up the fresh session cookie
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Signup failed");
@@ -62,7 +67,7 @@ export default function AuthModal({ onClose }: { onClose: () => void }) {
   };
 
   const canNext =
-    (step === 0 && !!grade) ||
+    (step === 0 && !!grade && ageValid) ||
     (step === 1 && skills.length >= 3 && skills.length <= 5) ||
     step === 2;
 
@@ -114,8 +119,25 @@ export default function AuthModal({ onClose }: { onClose: () => void }) {
 
           {step === 0 && (
             <div className="space-y-3">
-              <p className="text-sm text-mist">First, what's your academic stage? We'll tag your profile 18+ or &lt;18 — no birthday forms.</p>
-              <p className="-mt-2 text-xs text-mist/80">Handle first: <input value={handle} onChange={(e) => setHandle(e.target.value.toLowerCase())} placeholder="e.g. jesse.builds" className="ml-2 w-48 rounded-lg border border-edge bg-surface/80 px-2.5 py-1 text-sm" /></p>
+              <p className="text-sm text-mist">First, what's your academic stage? One number and you're set — no birthday forms.</p>
+              <p className="-mt-2 text-xs text-mist/80">
+                Handle: <input value={handle} onChange={(e) => setHandle(e.target.value.toLowerCase())} placeholder="e.g. jesse.builds" className="ml-2 w-44 rounded-lg border border-edge bg-surface/80 px-2.5 py-1 text-sm" />
+                <span className="ml-2">Age:</span>
+                <input
+                  value={age}
+                  onChange={(e) => setAge(e.target.value.replace(/\D/g, "").slice(0, 2))}
+                  inputMode="numeric"
+                  placeholder="16"
+                  className="ml-2 w-16 rounded-lg border border-edge bg-surface/80 px-2.5 py-1 text-sm"
+                />
+                {previewTag && (
+                  <span className={`ml-2 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${ageNum >= 18 ? "border-ice/40 text-ice" : "border-gold/40 text-gold"}`}>
+                    {previewTag}
+                  </span>
+                )}
+              </p>
+              {age !== "" && !ageValid && <p className="-mt-1 text-xs text-coral">Enter an age between 10 and 30.</p>
+              }
               {GRADES.map((g) => (
                 <button
                   key={g.key}
@@ -126,7 +148,7 @@ export default function AuthModal({ onClose }: { onClose: () => void }) {
                     <span className="font-display block font-semibold">{g.label}</span>
                     <span className="text-xs text-mist">{g.hint}</span>
                   </span>
-                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${grade === g.key ? "border-gold/40 text-gold" : "border-edge text-mist"}`}>{g.tag}</span>
+                  {g.key === suggestedGrade && <span className="text-[11px] font-semibold text-ice">suggested</span>}
                 </button>
               ))}
             </div>

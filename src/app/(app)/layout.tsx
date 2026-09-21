@@ -5,7 +5,7 @@ import { Providers } from "@/components/providers";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const userId = await getSessionUserId();
-  if (!userId) redirect("/");
+  if (!userId) redirect("/welcome");
 
   return (
     <Providers>

@@ -16,6 +16,8 @@ interface SessionCtx {
   refreshUnread: () => Promise<void>;
   pendingRequests: number;
   refreshChats: () => Promise<void>;
+  quietActive: boolean;
+  updateSettings: (patch: Record<string, unknown>) => Promise<boolean>;
 }
 
 const SessionContext = createContext<SessionCtx>({
@@ -27,6 +29,8 @@ const SessionContext = createContext<SessionCtx>({
   refreshUnread: async () => {},
   pendingRequests: 0,
   refreshChats: async () => {},
+  quietActive: false,
+  updateSettings: async () => false,
 });
 
 export const useSession = () => useContext(SessionContext);
@@ -103,6 +107,45 @@ export function Providers({ children }: { children: React.ReactNode }) {
     window.location.href = "/";
   }, []);
 
+  const updateSettings = useCallback(
+    async (patch: Record<string, unknown>) => {
+      try {
+        await api("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
+        await refresh();
+        return true;
+      } catch (e) {
+        setToasts((t) => [...t, { id: toastSeq++, text: e instanceof Error ? e.message : "Couldn't save setting" }]);
+        return false;
+      }
+    },
+    [refresh]
+  );
+
+  // Quiet Mode: explicit pause window or School-Hours DND (weekdays 8:00–15:00).
+  const quietActive = useMemo(() => {
+    if (!me) return false;
+    const now = new Date();
+    if (me.settings.quietUntil && new Date(me.settings.quietUntil) > now) return true;
+    if (me.settings.schoolHoursDND) {
+      const day = now.getDay();
+      const hour = now.getHours();
+      if (day >= 1 && day <= 5 && hour >= 8 && hour < 15) return true;
+    }
+    return false;
+  }, [me]);
+
+  // Push display settings onto <html> so the whole app reacts instantly.
+  useEffect(() => {
+    const s = me?.settings;
+    const root = document.documentElement;
+    const theme = s?.theme ?? "dark";
+    root.dataset.theme =
+      theme === "system" ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme;
+    root.dataset.textSize = s?.textSize ?? "default";
+    root.dataset.motion = s?.reducedMotion ? "reduced" : "full";
+    root.dataset.contrast = s?.highContrast ? "high" : "normal";
+  }, [me]);
+
   const toast = useCallback((text: string) => {
     const id = toastSeq++;
     setToasts((t) => [...t, { id, text }]);
@@ -113,8 +156,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const openProfile = useCallback((handle: string) => setProfileHandle(handle), []);
 
   const sessionValue = useMemo(
-    () => ({ me, loading, refresh, signOut, unreadCount, refreshUnread, pendingRequests, refreshChats }),
-    [me, loading, refresh, signOut, unreadCount, refreshUnread, pendingRequests, refreshChats]
+    () => ({ me, loading, refresh, signOut, unreadCount, refreshUnread, pendingRequests, refreshChats, quietActive, updateSettings }),
+    [me, loading, refresh, signOut, unreadCount, refreshUnread, pendingRequests, refreshChats, quietActive, updateSettings]
   );
   const uiValue = useMemo(() => ({ toast, openComposer, openProfile }), [toast, openComposer, openProfile]);
 

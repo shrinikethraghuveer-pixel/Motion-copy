@@ -2,9 +2,40 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getSessionUserId } from "@/lib/session";
 import { readDB, writeDB, serialize } from "@/lib/db";
-import { ageTagOf, type DB, type FeedPost, type Post, type PublicUser, type User } from "@/lib/schema";
+import {
+  ageTagOf,
+  DEFAULT_SETTINGS,
+  NOTIFY_KEY_OF,
+  type DB,
+  type FeedPost,
+  type Post,
+  type PublicUser,
+  type User,
+  type UserSettings,
+} from "@/lib/schema";
 
 export const json = NextResponse.json;
+
+/** Merge persisted settings over defaults so pre-settings accounts read cleanly. */
+export function withSettings(u: Pick<User, "settings">): UserSettings {
+  const s: Partial<UserSettings> = u.settings ?? {};
+  return {
+    ...DEFAULT_SETTINGS,
+    ...s,
+    notify: { ...DEFAULT_SETTINGS.notify, ...(s.notify ?? {}) },
+    twoFactor: { ...DEFAULT_SETTINGS.twoFactor, ...(s.twoFactor ?? {}) },
+    blocked: s.blocked ?? [],
+    muted: s.muted ?? [],
+    passkeys: s.passkeys ?? [],
+  };
+}
+
+/** True when the recipient's notification prefs allow this notification type. */
+export function shouldNotify(db: DB, recipientId: string, type: keyof typeof NOTIFY_KEY_OF): boolean {
+  const u = db.users.find((x) => x.id === recipientId);
+  if (!u || u.deactivatedAt) return false;
+  return withSettings(u).notify[NOTIFY_KEY_OF[type]];
+}
 
 export function bad(msg: string, status = 400) {
   return NextResponse.json({ error: msg }, { status });
@@ -30,11 +61,14 @@ export function connectionStateBetween(db: DB, selfId: string | null, otherId: s
 }
 
 export function toPublicUser(db: DB, u: User, selfId: string | null): PublicUser {
+  const s = withSettings(u);
+  const { passwordHash: _ph, email: _e, phone: _p, ...safe } = u;
   return {
-    ...u,
-    ageTag: ageTagOf(u),
+    ...safe,
+    ageTag: ageTagOf(u), // display is gated client-side by settings.showAgeTag
     isSelf: selfId === u.id,
     connectionState: connectionStateBetween(db, selfId, u.id),
+    settings: s,
   };
 }
 
@@ -58,6 +92,8 @@ export function hydratePost(db: DB, post: Post, selfId: string | null): FeedPost
           ageTag: "18+",
           isSelf: false,
           connectionState: "none",
+          settings: DEFAULT_SETTINGS,
+          deactivatedAt: new Date(0).toISOString(),
         },
     likedByMe: selfId ? post.likes.includes(selfId) : false,
     repostedByMe: selfId ? post.reposts.includes(selfId) : false,

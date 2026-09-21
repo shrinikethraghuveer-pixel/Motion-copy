@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { bad, persist, readBody, requireUser, toPublicUser } from "@/lib/server";
+import { bad, persist, readBody, requireUser, toPublicUser, withSettings } from "@/lib/server";
 import { newId } from "@/lib/session";
 import type { Chat, ChatMessage, Notification } from "@/lib/schema";
 
@@ -50,10 +50,26 @@ export async function POST(req: NextRequest) {
       chat = db.chats.find((c) => c.id === body.chatId && c.participantIds.includes(me.id));
       if (!chat) return bad("Conversation not found.", 404);
       if (chat.status === "declined") return bad("This conversation is closed.", 403);
+      const otherId = chat.participantIds.find((p) => p !== me.id);
+      const other = otherId ? db.users.find((u) => u.id === otherId) : undefined;
+      if (other?.deactivatedAt) return bad("This account is no longer active.", 403);
+      if (other && withSettings(other).blocked.includes(me.id)) return bad("You can't message this user.", 403);
     } else {
       const target = db.users.find((u) => u.handle === body.targetHandle);
       if (!target) return bad("User not found.", 404);
       if (target.id === me.id) return bad("You can't message yourself.");
+      if (target.deactivatedAt) return bad("This account is no longer active.", 403);
+      const targetSettings = withSettings(target);
+      if (targetSettings.blocked.includes(me.id)) return bad("You can't message this user.", 403);
+      if (targetSettings.allowDMs === "no_one") return bad("This student has direct messages turned off.", 403);
+      const alreadyConnected = db.connections.some(
+        (c) =>
+          c.status === "accepted" &&
+          ((c.requesterId === me.id && c.targetId === target.id) || (c.requesterId === target.id && c.targetId === me.id))
+      );
+      if (targetSettings.allowDMs === "connections" && !alreadyConnected) {
+        return bad("Only connections can message this student — send a connect request first.", 403);
+      }
       chat = db.chats.find(
         (c) => c.participantIds.length === 2 && c.participantIds.includes(me.id) && c.participantIds.includes(target.id)
       );

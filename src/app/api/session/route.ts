@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { headers } from "next/headers";
 import { readDB, writeDB, serialize } from "@/lib/db";
-import { clearSession, newId, setSession } from "@/lib/session";
+import { clearSession, describeDevice, getSessionUserId, newId, setSession } from "@/lib/session";
 import { ageTagOf, type PublicUser, type User } from "@/lib/schema";
+import { withSettings } from "@/lib/server";
 import { DEMO_PASSWORD } from "@/lib/seed";
+import { verifyPassword } from "@/lib/auth";
 
 function publicUser(u: User, selfId: string | null, db: { connections: { requesterId: string; targetId: string; status: string }[] }): PublicUser {
   let connectionState: PublicUser["connectionState"] = "none";
@@ -18,7 +21,8 @@ function publicUser(u: User, selfId: string | null, db: { connections: { request
       else connectionState = link.requesterId === selfId ? "pending_out" : "pending_in";
     }
   }
-  return { ...u, ageTag: ageTagOf(u), isSelf: selfId === u.id, connectionState };
+  const { passwordHash: _ph, email: _e, phone: _p, ...safe } = u;
+  return { ...safe, ageTag: ageTagOf(u), isSelf: selfId === u.id, connectionState, settings: withSettings(u) };
 }
 
 export async function GET() {
@@ -34,14 +38,20 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
-    mode?: "signup" | "demo";
+    mode?: "signup" | "demo" | "login";
     handle?: string;
     password?: string;
     grade?: User["grade"];
+    age?: number;
     skills?: string[];
     goal?: User["goal"];
   };
   const db = await readDB();
+  const ua = (await headers()).get("user-agent") ?? "";
+  const logLogin = async (userId: string) => {
+    db.loginEvents.unshift({ userId, at: new Date().toISOString(), device: describeDevice(ua) });
+    db.loginEvents = db.loginEvents.slice(0, 200);
+  };
 
   // Demo quick-login (password "demo" for any seeded account)
   if (body.mode === "demo") {
@@ -49,6 +59,26 @@ export async function POST(req: NextRequest) {
     if (!user || body.password !== DEMO_PASSWORD) {
       return NextResponse.json({ error: "Unknown demo account or wrong password." }, { status: 401 });
     }
+    if (user.deactivatedAt) {
+      return NextResponse.json({ error: "This account is deactivated. Reactivate from Settings to sign back in." }, { status: 403 });
+    }
+    await logLogin(user.id);
+    await serialize(() => writeDB(db));
+    await setSession(user.id);
+    return NextResponse.json({ user: publicUser(user, user.id, db) });
+  }
+
+  // Real password login (password set via Settings → Security)
+  if (body.mode === "login") {
+    const user = db.users.find((u) => u.handle === body.handle);
+    if (!user?.passwordHash || !verifyPassword(body.password ?? "", user.passwordHash)) {
+      return NextResponse.json({ error: "Wrong handle or password." }, { status: 401 });
+    }
+    if (user.deactivatedAt) {
+      return NextResponse.json({ error: "This account is deactivated. Reactivate from Settings to sign back in." }, { status: 403 });
+    }
+    await logLogin(user.id);
+    await serialize(() => writeDB(db));
     await setSession(user.id);
     return NextResponse.json({ user: publicUser(user, user.id, db) });
   }
@@ -60,6 +90,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Handle must be 3–20 chars: letters, numbers, dots, dashes." }, { status: 400 });
   }
   if (!body.grade) return NextResponse.json({ error: "Pick your academic stage." }, { status: 400 });
+  const age = Math.floor(Number(body.age));
+  if (!Number.isFinite(age) || age < 10 || age > 30) {
+    return NextResponse.json({ error: "Enter a real age between 10 and 30." }, { status: 400 });
+  }
   if (!body.skills || body.skills.length < 3 || body.skills.length > 5) {
     return NextResponse.json({ error: "Pick 3 to 5 interests." }, { status: 400 });
   }
@@ -79,6 +113,7 @@ export async function POST(req: NextRequest) {
     handle,
     name,
     grade: body.grade,
+    age,
     school: "Independent",
     headline: headlines[body.grade],
     skills: body.skills.slice(0, 5),
@@ -87,6 +122,7 @@ export async function POST(req: NextRequest) {
     createdAt: new Date().toISOString(),
   };
   db.users.push(user);
+  await logLogin(user.id);
   await serialize(() => writeDB(db));
   await setSession(user.id);
   return NextResponse.json({ user: publicUser(user, user.id, db) }, { status: 201 });

@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Inbox, MessageCircle, Send, X } from "lucide-react";
-import { api, post, type PublicUser, type ThreadSummary } from "@/lib/client";
+import { Check, Inbox, MessageCircle, Search, Send, X } from "lucide-react";
+import { api, post, type ThreadSummary } from "@/lib/client";
 import { timeAgo } from "@/lib/utils";
 import { useSession, useUI } from "@/components/providers";
 import { Avatar, EmptyState } from "@/components/ui/primitives";
@@ -15,6 +15,7 @@ export default function ChatPage() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
   const [showRequests, setShowRequests] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -35,6 +36,11 @@ export default function ChatPage() {
   const active = threads.find((t) => t.id === activeId) ?? null;
   const requests = threads.filter((t) => t.status === "pending" && !t.requestedByMe);
   const list = threads.filter((t) => t.status !== "pending" || t.requestedByMe);
+  const visibleList = list.filter((t) => {
+    const query = searchTerm.trim().toLowerCase();
+    if (!query) return true;
+    return [t.other.name, t.other.handle, t.lastMessage?.text ?? ""].some((value) => value.toLowerCase().includes(query));
+  });
 
   const send = async () => {
     if (!draft.trim() || !active) return;
@@ -78,69 +84,88 @@ export default function ChatPage() {
   }, [activeId]);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-      <div className="space-y-3">
-        <h1 className="font-display text-2xl font-bold">Chat</h1>
-
-        <button
-          onClick={() => setShowRequests((v) => !v)}
-          className={`glass flex w-full items-center justify-between p-4 text-left transition ${requests.length > 0 ? "border-ice/30" : ""}`}
-        >
-          <span className="flex items-center gap-2.5 text-sm font-semibold">
-            <Inbox size={17} className="text-ice" /> Message Requests
-          </span>
-          {requests.length > 0 && <span className="rounded-full bg-ice/20 px-2 py-0.5 text-xs font-bold text-ice">{requests.length}</span>}
-        </button>
-
-        {showRequests &&
-          (requests.length === 0 ? (
-            <p className="px-1 text-xs text-mist">No pending requests. DMs from non-connections land here.</p>
-          ) : (
-            requests.map((t) => (
-              <div key={t.id} className="glass scale-in space-y-2.5 p-4">
-                <div className="flex items-center gap-2.5">
-                  <Avatar user={t.other} size={36} />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">{t.other.name}</p>
-                    <p className="truncate text-xs text-mist">@{t.other.handle}</p>
-                  </div>
-                </div>
-                {t.lastMessage && <p className="line-clamp-2 text-xs text-ink/75">"{t.lastMessage.text}"</p>}
-                <div className="flex gap-2">
-                  <button onClick={() => respond(t.id, "accept")} className="flex flex-1 items-center justify-center gap-1.5 rounded-full bg-ice py-1.5 text-xs font-bold text-canvas hover:brightness-110">
-                    <Check size={13} /> Accept
-                  </button>
-                  <button onClick={() => respond(t.id, "decline")} className="glass-pill flex flex-1 items-center justify-center gap-1.5 py-1.5 text-xs font-semibold text-mist hover:text-coral">
-                    <X size={13} /> Decline
-                  </button>
-                </div>
-                <p className="text-[10px] text-mist/70">Declining sends no notification.</p>
+    <div className="min-h-[calc(100vh-5rem)] bg-slate-200/70 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+      <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-6xl flex-col px-4 py-6">
+        <div className="grid h-[720px] grid-cols-12 gap-0 overflow-hidden rounded-2xl border border-white/90 bg-white/80 shadow-xl shadow-slate-300/50 backdrop-blur-md dark:border-zinc-800/80 dark:bg-zinc-900/60 dark:shadow-none">
+          <aside className="col-span-12 flex flex-col border-slate-200/80 bg-slate-50/60 md:col-span-4 md:border-r dark:border-zinc-800/80 dark:bg-zinc-900/30">
+            <div className="border-b border-slate-200/80 p-4 dark:border-zinc-800/80">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">Messages</h1>
+                <span className="text-xs text-zinc-500">{list.length}</span>
               </div>
-            ))
-          ))}
+              <label className="relative block">
+                <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                <input
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search conversations"
+                  aria-label="Search conversations"
+                  className="w-full rounded-xl border border-slate-300 bg-slate-100 px-3 py-2 pl-9 text-xs text-zinc-900 outline-none transition focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 placeholder:text-zinc-500 dark:border-zinc-700/60 dark:bg-zinc-800/50 dark:text-zinc-100"
+                />
+              </label>
+            </div>
 
-        <div className="space-y-1.5">
-          {list.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setActiveId(t.id)}
-              className={`glass flex w-full items-center gap-3 p-3 text-left transition ${activeId === t.id ? "border-ice/40" : "hover:border-ice/20"}`}
-            >
-              <Avatar user={t.other} size={40} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="truncate text-sm font-semibold">{t.other.name}</p>
-                  {t.lastMessage && <span className="shrink-0 text-[10px] text-mist">{timeAgo(t.lastMessage.createdAt)}</span>}
+            <div className="flex-1 overflow-y-auto p-3">
+              <button
+                onClick={() => setShowRequests((v) => !v)}
+                className="mb-3 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-100/90 px-3 py-2 text-left text-xs text-zinc-700 transition hover:bg-slate-200/50 dark:border-zinc-800 dark:bg-zinc-800/40 dark:text-zinc-300 dark:hover:bg-zinc-800/80"
+              >
+                <span className="flex items-center gap-2"><Inbox size={14} /> Message Requests</span>
+                {requests.length > 0 && <span className="rounded-full bg-violet-600/20 px-2 py-0.5 text-[10px] font-semibold text-violet-300">{requests.length}</span>}
+              </button>
+
+              {showRequests && (
+                <div className="mb-3 space-y-2">
+                  {requests.length === 0 ? (
+                    <p className="px-2 py-2 text-xs text-zinc-500">No pending requests. DMs from non-connections land here.</p>
+                  ) : requests.map((t) => (
+                    <div key={t.id} className="rounded-xl border border-slate-200 bg-slate-100/90 p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
+                      <div className="flex items-center gap-2.5">
+                        <Avatar user={t.other} size={34} />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{t.other.name}</p>
+                          <p className="truncate text-xs text-zinc-500">@{t.other.handle}</p>
+                        </div>
+                      </div>
+                      {t.lastMessage && <p className="mt-2 line-clamp-2 text-xs text-zinc-400">&quot;{t.lastMessage.text}&quot;</p>}
+                      <div className="mt-3 flex gap-2">
+                        <button onClick={() => respond(t.id, "accept")} className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-violet-600 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-500">
+                          <Check size={13} /> Accept
+                        </button>
+                        <button onClick={() => respond(t.id, "decline")} className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800/50 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-700/70">
+                          <X size={13} /> Decline
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <p className="truncate text-xs text-mist">{t.lastMessage ? t.lastMessage.text : "Say hi — conversation started"}</p>
-              </div>
-            </button>
-          ))}
-          {list.length === 0 && <p className="px-1 text-xs text-mist">No active conversations yet.</p>}
-        </div>
-      </div>
+              )}
 
-      <div className="glass flex min-h-[60vh] flex-col">
+              <div className="space-y-1">
+                {visibleList.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setActiveId(t.id)}
+                    className={`flex w-full cursor-pointer items-center gap-3 border-l-2 p-3 text-left transition-colors ${activeId === t.id ? "border-violet-500 bg-violet-600/10 text-zinc-900 dark:text-zinc-100" : "border-transparent text-zinc-600 hover:bg-slate-200/50 dark:text-zinc-400 dark:hover:bg-zinc-800/40"}`}
+                  >
+                    <span className="shrink-0 rounded-full bg-gradient-to-br from-cyan-500/70 to-violet-600/80 p-0.5">
+                      <Avatar user={t.other} size={36} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{t.other.name}</span>
+                        {t.lastMessage && <span className="shrink-0 text-[10px] text-zinc-500">{timeAgo(t.lastMessage.createdAt)}</span>}
+                      </span>
+                      <span className="block truncate text-xs text-zinc-400">{t.lastMessage ? t.lastMessage.text : "Say hi — conversation started"}</span>
+                    </span>
+                  </button>
+                ))}
+                {visibleList.length === 0 && <p className="px-2 py-4 text-xs text-zinc-500">{list.length === 0 ? "No active conversations yet." : "No conversations match your search."}</p>}
+              </div>
+            </div>
+          </aside>
+
+          <section className="col-span-12 flex min-h-0 flex-col bg-white/30 md:col-span-8 dark:bg-zinc-950/40">
         {!active ? (
           <div className="flex flex-1 items-center justify-center p-6">
             <EmptyState icon={<MessageCircle size={28} />} title="Pick a conversation" hint="Or start one from any profile's Message button." />
@@ -148,45 +173,50 @@ export default function ChatPage() {
         ) : active.status === "pending" ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
             <Avatar user={active.other} size={64} ring />
-            <p className="font-display font-bold">{active.other.name}</p>
-            <p className="max-w-sm text-sm text-mist">
+            <p className="font-semibold text-zinc-100">{active.other.name}</p>
+            <p className="max-w-sm text-sm text-zinc-400">
               This is a message request. {active.requestedByMe ? "Your message is waiting for them to accept." : "Accept the request to keep chatting."}
             </p>
           </div>
         ) : (
           <>
-            <header className="flex items-center gap-3 border-b border-edge p-4">
+            <header className="flex items-center gap-3 border-b border-slate-200/80 p-4 dark:border-zinc-800/80">
               <Avatar user={active.other} size={40} />
-              <div>
-                <p className="font-display font-bold">{active.other.name}</p>
-                <p className="text-xs text-mist">@{active.other.handle} · {active.other.school}</p>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-zinc-900 dark:text-zinc-100">{active.other.name}</p>
+                <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">@{active.other.handle} · {active.other.school}</p>
               </div>
+              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-400">Active</span>
             </header>
             <div className="flex-1 space-y-3 overflow-y-auto p-4">
               {(active.lastMessage ? [active.lastMessage] : []).map((m) => (
                 <div key={m.id} className={`flex ${m.senderId === active.other.id ? "justify-start" : "justify-end"}`}>
-                  <div className={`max-w-[75%] rounded-2xl px-4 py-2 text-sm ${m.senderId === active.other.id ? "bg-card2" : "bg-ice/20 text-ink"}`}>
+                  <div className={`max-w-[70%] p-3 text-sm backdrop-blur-sm ${m.senderId === active.other.id ? "rounded-2xl rounded-tl-xs border border-slate-200 bg-slate-100 text-zinc-900 dark:border-zinc-700/40 dark:bg-zinc-800/60 dark:text-zinc-200" : "ml-auto rounded-2xl rounded-tr-xs bg-violet-600 text-white shadow-lg shadow-violet-600/20"}`}>
                     {m.text}
-                    <div className="mt-1 text-right text-[10px] text-mist">{timeAgo(m.createdAt)}</div>
+                    <div className="mt-1 text-right text-[10px] text-zinc-400">{timeAgo(m.createdAt)}</div>
                   </div>
                 </div>
               ))}
               <div ref={bottomRef} />
             </div>
-            <div className="flex gap-2 border-t border-edge p-3">
+            <div className="border-t border-zinc-200/80 bg-white/40 p-4 dark:border-zinc-800/80 dark:bg-zinc-900/40">
+              <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-slate-100/90 px-4 py-2.5 transition-all focus-within:border-violet-500/50 focus-within:ring-1 focus-within:ring-violet-500/50 dark:border-zinc-800 dark:bg-zinc-900/80">
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && send()}
-                placeholder="Message…"
-                className="flex-1 rounded-full border border-edge bg-surface/70 px-4 py-2 text-sm placeholder:text-mist/60"
+                placeholder="Write a message..."
+                className="w-full border-none bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-500 dark:text-zinc-100"
               />
-              <button onClick={send} className="rounded-full bg-ice p-2.5 text-canvas transition hover:brightness-110" aria-label="Send">
-                <Send size={16} />
-              </button>
+                <button onClick={send} className="cursor-pointer rounded-lg bg-violet-600 p-2 text-white shadow-md shadow-violet-600/30 transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50" aria-label="Send" disabled={!draft.trim()}>
+                  <Send size={16} />
+                </button>
+              </div>
             </div>
           </>
         )}
+          </section>
+        </div>
       </div>
     </div>
   );

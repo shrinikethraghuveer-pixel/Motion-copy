@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Bookmark,
   CalendarPlus,
+  Eye,
   Heart,
   MapPin,
   MessageCircle,
@@ -34,14 +35,33 @@ function RichText({ text }: { text: string }) {
   );
 }
 
-function MediaArt({ seed, label }: { seed: string; label: string }) {
+function MediaArt({ seed, label, blur = false }: { seed: string; label: string; blur?: boolean }) {
+  const [revealed, setRevealed] = useState(false);
+  const hidden = blur && !revealed;
   let a = 0;
   for (let i = 0; i < seed.length; i++) a = (a * 31 + seed.charCodeAt(i)) % 360;
   return (
-    <div className="relative mt-3 overflow-hidden rounded-2xl border border-edge">
-      <div className="h-56 w-full" style={{ background: `linear-gradient(120deg, hsl(${a} 65% 42%), hsl(${(a + 80) % 360} 70% 30%), #0b1329)` }} />
+    <div
+      className={`relative mt-3 overflow-hidden rounded-2xl border border-edge ${hidden ? "cursor-pointer" : ""}`}
+      onClick={() => hidden && setRevealed(true)}
+    >
+      <div
+        className="h-56 w-full"
+        style={{
+          background: `linear-gradient(120deg, hsl(${a} 65% 42%), hsl(${(a + 80) % 360} 70% 30%), #0b1329)`,
+          filter: hidden ? "blur(22px) saturate(0.6)" : undefined,
+          transform: hidden ? "scale(1.15)" : undefined,
+          transition: "filter 300ms ease, transform 300ms ease",
+        }}
+      />
       <div className="absolute inset-0 bg-gradient-to-t from-canvas/70 via-transparent to-transparent" />
       <div className="absolute bottom-3 left-4 text-xs font-medium text-white/80">{label}</div>
+      {hidden && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-canvas/45">
+          <Eye size={18} className="text-ink" />
+          <p className="text-xs font-medium text-ink">Sensitive content — tap to view</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -220,7 +240,7 @@ export default function PostCard({ post, onChange, onOpenProfile }: { post: Feed
 
       <div className="mt-3">
         <RichText text={post.text} />
-        {post.media && <MediaArt seed={post.media.seed} label={post.media.label} />}
+        {post.media && <MediaArt seed={post.media.seed} label={post.media.label} blur={me?.settings.blurMedia ?? false} />}
         {post.event && <EventMetaCard post={post} />}
       </div>
 

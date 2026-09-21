@@ -1,14 +1,15 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { bad, hydratePost, persist, readBody, requireUser } from "@/lib/server";
+import { bad, hydratePost, persist, readBody, requireUser, shouldNotify } from "@/lib/server";
 import { newId } from "@/lib/session";
 import type { Notification } from "@/lib/schema";
 
 type PostAction = "like" | "repost" | "comment" | "save";
 
 function notify(db: import("@/lib/schema").DB, n: Omit<Notification, "id" | "createdAt" | "read">) {
-  // Never notify about your own actions.
+  // Never notify about your own actions; respect the recipient's notification prefs.
   if (n.userId === n.actorId) return;
+  if (!shouldNotify(db, n.userId, n.type)) return;
   db.notifications.unshift({ id: newId("n"), read: false, createdAt: new Date().toISOString(), ...n });
 }
 

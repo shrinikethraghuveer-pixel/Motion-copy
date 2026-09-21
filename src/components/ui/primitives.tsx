@@ -28,30 +28,100 @@ export function Avatar({
   size = 44,
   ring = false,
 }: {
-  user: { id: string; name: string; ageTag?: string };
+  user: { id: string; name: string; ageTag?: string; photo?: string | null };
   size?: number;
   ring?: boolean;
 }) {
-  const { from, to } = gradientFor(user.id);
-  const inner = (
-    <span
-      className="flex items-center justify-center rounded-full font-semibold"
-      style={{
-        width: size,
-        height: size,
-        fontSize: size * 0.38,
-        background: `linear-gradient(135deg, hsl(${from} 70% 55%), hsl(${to} 70% 45%))`,
-        color: "#0b1329",
-      }}
-    >
-      {initialsOf(user.name)}
-    </span>
+  const inner = user.photo ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={user.photo}
+      alt={user.name}
+      className="flex items-center justify-center rounded-full object-cover"
+      style={{ width: size, height: size }}
+    />
+  ) : (
+    (() => {
+      const { from, to } = gradientFor(user.id);
+      return (
+        <span
+          className="flex items-center justify-center rounded-full font-semibold"
+          style={{
+            width: size,
+            height: size,
+            fontSize: size * 0.38,
+            background: `linear-gradient(135deg, hsl(${from} 70% 55%), hsl(${to} 70% 45%))`,
+            color: "#0b1329",
+          }}
+        >
+          {initialsOf(user.name)}
+        </span>
+      );
+    })()
   );
   if (!ring) return inner;
   return (
     <span className="rounded-full p-[2.5px]" style={{ background: "linear-gradient(135deg, #fbbf24, #38bdf8)" }}>
       <span className="block rounded-full bg-canvas p-[2px]">{inner}</span>
     </span>
+  );
+}
+
+/** iOS-style toggle used across Settings. Optimistic — caller decides whether to persist. */
+export function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors duration-200 ${
+        checked ? "border-ice/50 bg-gradient-to-r from-gold/50 to-ice/50" : "border-edge bg-card2"
+      }`}
+    >
+      <span
+        className="absolute top-[2px] block rounded-full border border-black/10 bg-white shadow transition-all duration-200"
+        style={{ left: checked ? 22 : 2, width: 18, height: 18 }}
+      />
+    </button>
+  );
+}
+
+/** Mini liquid-glass segmented selector for 2–4 options. */
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="liquid-track !p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={`relative rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+            value === o.value
+              ? "bg-gradient-to-br from-gold/30 to-ice/25 text-ink shadow-[0_0_10px_rgba(251,191,36,0.2)]"
+              : "text-mist hover:text-ink"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

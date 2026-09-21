@@ -27,20 +27,130 @@ export const REPORT_REASONS = [
   "Something else",
 ] as const;
 
+/* ---------- settings ---------- */
+
+export type Audience = "everyone" | "connections" | "no_one";
+export type ThemePref = "dark" | "light" | "system";
+export type TextSize = "default" | "large" | "xlarge";
+export type DisplayFont = "space" | "inter" | "system";
+
+export interface NotificationPrefs {
+  likes: boolean;
+  comments: boolean;
+  reposts: boolean;
+  dms: boolean;
+  connections: boolean;
+  opportunities: boolean;
+  announcements: boolean;
+  emailDigest: boolean;
+  smsAlerts: boolean;
+}
+
+export interface UserSettings {
+  // Privacy & visibility
+  privateProfile: boolean;
+  showSchool: boolean;
+  showAgeTag: boolean;
+  allowMentions: Audience;
+  allowDMs: Audience;
+  allowConnectRequests: "everyone" | "no_one";
+  allowReposts: boolean;
+  discoverable: boolean;
+  personalizeSuggestions: boolean;
+  blurMedia: boolean;
+  blocked: string[];
+  muted: string[];
+  // Notifications
+  notify: NotificationPrefs;
+  quietUntil: string | null;
+  schoolHoursDND: boolean;
+  // Security
+  twoFactor: { enabled: boolean; method: "app" | "sms" | "passkey" };
+  passkeys: string[];
+  // Display & accessibility
+  theme: ThemePref;
+  textSize: TextSize;
+  displayFont: DisplayFont;
+  reducedMotion: boolean;
+  highContrast: boolean;
+  language: string;
+  timezone: string;
+}
+
+export const DEFAULT_SETTINGS: UserSettings = {
+  privateProfile: false,
+  showSchool: true,
+  showAgeTag: true,
+  allowMentions: "everyone",
+  allowDMs: "everyone",
+  allowConnectRequests: "everyone",
+  allowReposts: true,
+  discoverable: true,
+  personalizeSuggestions: true,
+  blurMedia: false,
+  blocked: [],
+  muted: [],
+  notify: {
+    likes: true,
+    comments: true,
+    reposts: true,
+    dms: true,
+    connections: true,
+    opportunities: true,
+    announcements: true,
+    emailDigest: false,
+    smsAlerts: false,
+  },
+  quietUntil: null,
+  schoolHoursDND: false,
+  twoFactor: { enabled: false, method: "app" },
+  passkeys: [],
+  theme: "dark",
+  textSize: "default",
+  displayFont: "space",
+  reducedMotion: false,
+  highContrast: false,
+  language: "en",
+  timezone: "system",
+};
+
+/** Which NotificationPrefs key each notification type maps to. */
+export const NOTIFY_KEY_OF: Record<NotificationType, keyof NotificationPrefs> = {
+  like: "likes",
+  comment: "comments",
+  repost: "reposts",
+  connect: "connections",
+  accept: "connections",
+  event: "opportunities",
+};
+
 export interface User {
   id: string;
   handle: string;
   name: string;
   grade: Grade;
+  /** Self-reported age in years, captured at onboarding — the source of truth for the age tag. */
+  age?: number;
   school: string;
   headline: string;
   skills: string[];
   goal: Goal;
   following: string[];
   createdAt: string;
+  settings?: UserSettings;
+  photo?: string;
+  email?: string;
+  phone?: string;
+  passwordHash?: string;
+  deactivatedAt?: string | null;
 }
 
-export const ageTagOf = (u: Pick<User, "grade">): AgeTag => (u.grade === "college" ? "18+" : "<18");
+/**
+ * Derive the non-intrusive age tag from the user's real age when known.
+ * A high-school senior can be 18 — grade alone is a legacy fallback.
+ */
+export const ageTagOf = (u: Pick<User, "grade"> & Partial<Pick<User, "age">>): AgeTag =>
+  typeof u.age === "number" && u.age > 0 ? (u.age >= 18 ? "18+" : "<18") : u.grade === "college" ? "18+" : "<18";
 
 export type ConnectionStatus = "pending" | "accepted";
 
@@ -137,6 +247,14 @@ export interface Notification {
   createdAt: string;
 }
 
+export interface SessionRecord {
+  token: string;
+  userId: string;
+  device: string;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
 export interface DB {
   users: User[];
   connections: Connection[];
@@ -144,7 +262,9 @@ export interface DB {
   posts: Post[];
   groups: Group[];
   notifications: Notification[];
-  reports: Array<{ id: string; reporterId: string; targetType: "user" | "post"; targetId: string; reason: string; createdAt: string }>;
+  sessions: SessionRecord[];
+  loginEvents: Array<{ userId: string; at: string; device: string }>;
+  reports: Array<{ id: string; reporterId: string; targetType: "user" | "post" | "feedback"; targetId: string; reason: string; createdAt: string }>;
 }
 
 /* ---------- API payload shapes ---------- */
@@ -153,6 +273,7 @@ export interface PublicUser extends User {
   ageTag: AgeTag;
   isSelf: boolean;
   connectionState: "self" | "connected" | "pending_out" | "pending_in" | "none";
+  settings: UserSettings;
 }
 
 export interface FeedPost extends Post {

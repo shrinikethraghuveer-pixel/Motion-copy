@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { bad, hydratePost, persist, readBody, requireUser } from "@/lib/server";
+import { bad, hydratePost, persist, readBody, requireUser, withSettings } from "@/lib/server";
 import { newId } from "@/lib/session";
 import type { Post } from "@/lib/schema";
 
@@ -20,8 +20,18 @@ export async function GET(req: NextRequest) {
       .filter((c) => c.status === "accepted" && (c.requesterId === me.id || c.targetId === me.id))
       .map((c) => (c.requesterId === me.id ? c.targetId : c.requesterId))
   );
+  const mySettings = withSettings(me);
+  const authorHidden = (authorId: string) => {
+    const a = db.users.find((u) => u.id === authorId);
+    if (!a) return true; // deleted
+    if (a.deactivatedAt) return true;
+    const as = withSettings(a);
+    if (as.blocked.includes(me.id) || mySettings.blocked.includes(authorId)) return true;
+    if (as.muted.includes(authorId) || mySettings.muted.includes(authorId)) return true;
+    return false;
+  };
 
-  let list = [...db.posts];
+  let list = [...db.posts].filter((p) => !authorHidden(p.authorId));
   if (tab === "circle") {
     list = list.filter((p) => friendIds.has(p.authorId) || p.authorId === me.id);
   } else if (tab === "saved") {
@@ -62,6 +72,8 @@ export async function POST(req: NextRequest) {
       kind: body.event.kind ?? "event",
     };
   }
+
+  if (me.deactivatedAt) return bad("Reactivate your account to post again.", 403);
 
   const post: Post = {
     id: newId("p"),

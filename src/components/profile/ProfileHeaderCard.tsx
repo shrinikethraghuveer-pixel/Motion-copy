@@ -42,7 +42,7 @@ export function ConnectMessageButtons({
 
   if (user.isSelf) {
     return (
-      <button onClick={() => router.push("/settings")} className={`glass-pill font-semibold text-mist transition hover:text-ink ${btnBase}`}>
+      <button onClick={() => router.push(`/profile/${encodeURIComponent(user.handle)}`)} className={`glass-pill font-semibold text-mist transition hover:text-ink ${btnBase}`}>
         Edit profile
       </button>
     );

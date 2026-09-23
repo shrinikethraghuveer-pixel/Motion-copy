@@ -23,6 +23,8 @@ export interface ProfilePayload {
   highlights: FeedPost[];
   clubs: Array<{ id: string; name: string; tag: string; role: string; memberCount: number }>;
   stats: { connections: number; posts: number; following: number };
+  /** True when the account is private/deactivated and content is withheld. */
+  locked?: boolean;
 }
 
 export interface ConnectionsPayload {

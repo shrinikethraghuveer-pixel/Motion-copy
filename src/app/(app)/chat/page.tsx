@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Check, Inbox, MessageCircle, Search, Send, X } from "lucide-react";
 import { api, post, type ThreadSummary } from "@/lib/client";
 import { timeAgo } from "@/lib/utils";
@@ -121,11 +122,11 @@ export default function ChatPage() {
                   ) : requests.map((t) => (
                     <div key={t.id} className="rounded-xl border border-slate-200 bg-slate-100/90 p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
                       <div className="flex items-center gap-2.5">
-                        <Avatar user={t.other} size={34} />
-                        <div className="min-w-0">
+                        <Link href={`/profile/${encodeURIComponent(t.other.handle)}`} aria-label={`Open ${t.other.name}'s profile`} className="shrink-0"><Avatar user={t.other} size={34} /></Link>
+                        <Link href={`/profile/${encodeURIComponent(t.other.handle)}`} className="min-w-0 hover:text-violet-600 dark:hover:text-violet-400">
                           <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{t.other.name}</p>
                           <p className="truncate text-xs text-zinc-500">@{t.other.handle}</p>
-                        </div>
+                        </Link>
                       </div>
                       {t.lastMessage && <p className="mt-2 line-clamp-2 text-xs text-zinc-400">&quot;{t.lastMessage.text}&quot;</p>}
                       <div className="mt-3 flex gap-2">
@@ -143,22 +144,21 @@ export default function ChatPage() {
 
               <div className="space-y-1">
                 {visibleList.map((t) => (
-                  <button
+                  <div
                     key={t.id}
-                    onClick={() => setActiveId(t.id)}
-                    className={`flex w-full cursor-pointer items-center gap-3 border-l-2 p-3 text-left transition-colors ${activeId === t.id ? "border-violet-500 bg-violet-600/10 text-zinc-900 dark:text-zinc-100" : "border-transparent text-zinc-600 hover:bg-slate-200/50 dark:text-zinc-400 dark:hover:bg-zinc-800/40"}`}
+                    className={`flex w-full items-center gap-3 border-l-2 p-3 transition-colors ${activeId === t.id ? "border-violet-500 bg-violet-600/10 text-zinc-900 dark:text-zinc-100" : "border-transparent text-zinc-600 hover:bg-slate-200/50 dark:text-zinc-400 dark:hover:bg-zinc-800/40"}`}
                   >
-                    <span className="shrink-0 rounded-full bg-gradient-to-br from-cyan-500/70 to-violet-600/80 p-0.5">
+                    <Link href={`/profile/${encodeURIComponent(t.other.handle)}`} onClick={(e) => e.stopPropagation()} aria-label={`Open ${t.other.name}'s profile`} className="shrink-0 rounded-full bg-gradient-to-br from-cyan-500/70 to-violet-600/80 p-0.5">
                       <Avatar user={t.other} size={36} />
-                    </span>
-                    <span className="min-w-0 flex-1">
+                    </Link>
+                    <button onClick={() => setActiveId(t.id)} className="min-w-0 flex-1 cursor-pointer text-left">
                       <span className="flex items-center justify-between gap-2">
                         <span className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{t.other.name}</span>
                         {t.lastMessage && <span className="shrink-0 text-[10px] text-zinc-500">{timeAgo(t.lastMessage.createdAt)}</span>}
                       </span>
                       <span className="block truncate text-xs text-zinc-400">{t.lastMessage ? t.lastMessage.text : "Say hi — conversation started"}</span>
-                    </span>
-                  </button>
+                    </button>
+                  </div>
                 ))}
                 {visibleList.length === 0 && <p className="px-2 py-4 text-xs text-zinc-500">{list.length === 0 ? "No active conversations yet." : "No conversations match your search."}</p>}
               </div>
@@ -181,11 +181,11 @@ export default function ChatPage() {
         ) : (
           <>
             <header className="flex items-center gap-3 border-b border-slate-200/80 p-4 dark:border-zinc-800/80">
-              <Avatar user={active.other} size={40} />
-              <div className="min-w-0 flex-1">
+              <Link href={`/profile/${encodeURIComponent(active.other.handle)}`} aria-label={`Open ${active.other.name}'s profile`} className="shrink-0"><Avatar user={active.other} size={40} /></Link>
+              <Link href={`/profile/${encodeURIComponent(active.other.handle)}`} className="min-w-0 flex-1 hover:text-violet-600 dark:hover:text-violet-400">
                 <p className="font-semibold text-zinc-900 dark:text-zinc-100">{active.other.name}</p>
                 <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">@{active.other.handle} · {active.other.school}</p>
-              </div>
+              </Link>
               <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-400">Active</span>
             </header>
             <div className="flex-1 space-y-3 overflow-y-auto p-4">

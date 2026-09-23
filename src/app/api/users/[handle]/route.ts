@@ -8,7 +8,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ handle: st
   const { me, db } = auth;
   const { handle } = await ctx.params;
 
-  const user = db.users.find((u) => u.handle === handle);
+  // Accept handle ("zoedesigns") or user id ("u_zoe") — notification tiles navigate by id.
+  const user = db.users.find((u) => u.handle === handle || u.id === handle);
   if (!user) return bad("User not found.", 404);
 
   const posts = db.posts

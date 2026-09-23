@@ -66,7 +66,17 @@ export default function FloatingChatWidget() {
           <header className="flex items-center justify-between border-b border-slate-300/80 p-4 dark:border-zinc-800/80">
             <div className="flex min-w-0 items-center gap-2">
               {active && <button onClick={() => setSelectedId(null)} className="rounded-lg p-1 text-zinc-500 hover:bg-slate-200 dark:hover:bg-zinc-800" aria-label="Back to conversations"><ArrowLeft size={16} /></button>}
-              <h2 className="truncate text-sm font-semibold">{active ? active.other.name : "Quick Messages"}</h2>
+              {active ? (
+                <Link
+                  href={`/profile/${encodeURIComponent(active.other.handle)}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="truncate text-sm font-semibold hover:text-violet-600 dark:hover:text-violet-400"
+                >
+                  {active.other.name}
+                </Link>
+              ) : (
+                <h2 className="truncate text-sm font-semibold">Quick Messages</h2>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {!active && <Link href="/messages" className="text-xs text-violet-600 hover:underline dark:text-violet-400">View all</Link>}
@@ -77,8 +87,8 @@ export default function FloatingChatWidget() {
           {active ? (
             <>
               <div className="flex items-center gap-2 border-b border-slate-300/80 px-4 py-3 dark:border-zinc-800/80">
-                <span className="relative"><Avatar user={active.other} size={32} /><span className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-slate-100 bg-emerald-500 dark:border-zinc-900" /></span>
-                <div className="min-w-0"><p className="truncate text-xs font-semibold">{active.other.name}</p><p className="truncate text-[10px] text-zinc-500">@{active.other.handle}</p></div>
+                <Link href={`/profile/${encodeURIComponent(active.other.handle)}`} onClick={(e) => e.stopPropagation()} className="relative shrink-0" aria-label={`Open ${active.other.name}'s profile`}><Avatar user={active.other} size={32} /><span className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-slate-100 bg-emerald-500 dark:border-zinc-900" /></Link>
+                <Link href={`/profile/${encodeURIComponent(active.other.handle)}`} onClick={(e) => e.stopPropagation()} className="min-w-0 hover:text-violet-600 dark:hover:text-violet-400"><p className="truncate text-xs font-semibold">{active.other.name}</p><p className="truncate text-[10px] text-zinc-500">@{active.other.handle}</p></Link>
               </div>
               <div className="flex-1 space-y-2 overflow-y-auto p-4">
                 {active.lastMessage ? <div className={`max-w-[80%] rounded-2xl p-2.5 text-xs ${active.lastMessage.senderId === active.other.id ? "border border-slate-200 bg-slate-100 text-zinc-900 dark:border-zinc-700/40 dark:bg-zinc-800/60 dark:text-zinc-200" : "ml-auto bg-violet-600 text-white"}`}>{active.lastMessage.text}<div className="mt-1 text-right text-[9px] opacity-60">{timeAgo(active.lastMessage.createdAt)}</div></div> : <p className="text-center text-xs text-zinc-500">Start the conversation.</p>}
@@ -98,10 +108,13 @@ export default function FloatingChatWidget() {
               </label>
               <div className="flex-1 overflow-y-auto p-3">
                 {loading ? <p className="p-3 text-xs text-zinc-500">Loading conversations...</p> : visibleThreads.map((thread) => (
-                  <button key={thread.id} onClick={() => setSelectedId(thread.id)} className="flex w-full items-center gap-2.5 rounded-xl p-2.5 text-left transition hover:bg-slate-200/60 dark:hover:bg-zinc-800/40">
-                    <span className="relative shrink-0"><Avatar user={thread.other} size={34} /><span className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-slate-100 bg-emerald-500 dark:border-zinc-900" /></span>
-                    <span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-xs font-semibold">{thread.other.name}</span>{thread.lastMessage && <span className="shrink-0 text-[9px] text-zinc-500">{timeAgo(thread.lastMessage.createdAt)}</span>}</span><span className="block truncate text-[11px] text-zinc-500">{thread.lastMessage?.text ?? "Say hi — conversation started"}</span></span>
-                  </button>
+                  <div key={thread.id} className="flex w-full items-center gap-2.5 rounded-xl p-2.5 text-left transition hover:bg-slate-200/60 dark:hover:bg-zinc-800/40">
+                    <Link href={`/profile/${encodeURIComponent(thread.other.handle)}`} onClick={(e) => e.stopPropagation()} className="relative shrink-0" aria-label={`Open ${thread.other.name}'s profile`}><Avatar user={thread.other} size={34} /><span className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-slate-100 bg-emerald-500 dark:border-zinc-900" /></Link>
+                    <button onClick={() => setSelectedId(thread.id)} className="min-w-0 flex-1 cursor-pointer text-left">
+                      <span className="flex items-center justify-between gap-2"><span className="truncate text-xs font-semibold">{thread.other.name}</span>{thread.lastMessage && <span className="shrink-0 text-[9px] text-zinc-500">{timeAgo(thread.lastMessage.createdAt)}</span>}</span>
+                      <span className="block truncate text-[11px] text-zinc-500">{thread.lastMessage?.text ?? "Say hi — conversation started"}</span>
+                    </button>
+                  </div>
                 ))}
                 {!loading && visibleThreads.length === 0 && <p className="p-3 text-xs text-zinc-500">No conversations found.</p>}
               </div>

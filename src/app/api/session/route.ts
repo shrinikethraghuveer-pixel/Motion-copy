@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { headers } from "next/headers";
 import { readDB, writeDB, serialize } from "@/lib/db";
-import { clearSession, describeDevice, getSessionUserId, newId, setSession } from "@/lib/session";
+import { clearSession, describeDevice, getSessionToken, getSessionUserId, newId, setSession } from "@/lib/session";
 import { ageTagOf, type PublicUser, type User } from "@/lib/schema";
 import { withSettings } from "@/lib/server";
 import { DEMO_PASSWORD } from "@/lib/seed";
-import { verifyPassword } from "@/lib/auth";
+import { hashPassword, verifyPassword } from "@/lib/auth";
 
 function publicUser(u: User, selfId: string | null, db: { connections: { requesterId: string; targetId: string; status: string }[] }): PublicUser {
   let connectionState: PublicUser["connectionState"] = "none";
@@ -30,9 +30,13 @@ export async function GET() {
   const { getSessionUserId } = await import("@/lib/session");
   const selfId = await getSessionUserId();
   const me = selfId ? db.users.find((u) => u.id === selfId) ?? null : null;
+  // Dev convenience: APIs resolve a seeded user even with no session cookie.
+  // Surface that so /welcome can tell "really signed in" from "dev fallback".
+  const hasSessionCookie = Boolean(await getSessionToken());
   return NextResponse.json({
     user: me ? publicUser(me, selfId, db) : null,
     demoHandles: db.users.slice(0, 6).map((u) => ({ handle: u.handle, name: u.name })),
+    devFallback: !hasSessionCookie && process.env.NODE_ENV === "development",
   });
 }
 
@@ -41,10 +45,13 @@ export async function POST(req: NextRequest) {
     mode?: "signup" | "demo" | "login";
     handle?: string;
     password?: string;
+    name?: string;
+    email?: string;
     grade?: User["grade"];
     age?: number;
     skills?: string[];
-    goal?: User["goal"];
+    goals?: string[];
+    discoverySource?: string;
   };
   const db = await readDB();
   const ua = (await headers()).get("user-agent") ?? "";
@@ -83,21 +90,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ user: publicUser(user, user.id, db) });
   }
 
-  // Full signup with 3-step onboarding payload
-  const handle = (body.handle ?? "").trim().toLowerCase();
-  const name = handle ? handle.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "";
-  if (!/^[a-z0-9._-]{3,20}$/.test(handle)) {
-    return NextResponse.json({ error: "Handle must be 3–20 chars: letters, numbers, dots, dashes." }, { status: 400 });
+  // Full signup — core auth only. The 4-step questionnaire (stage, interests,
+  // goals, discovery source) happens post-auth in /onboarding.
+  const rawHandle = (body.handle ?? "").trim();
+  const handle = rawHandle.replace(/^@+/, "").toLowerCase();
+  const name = typeof body.name === "string" && body.name.trim()
+    ? body.name.trim().slice(0, 40)
+    : handle
+      ? handle.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+      : "";
+  // Accepts 3–20 chars: letters, numbers, underscore, dot, dash (leading @ stripped).
+  if (!/^[a-zA-Z0-9_.-]{3,20}$/.test(handle)) {
+    return NextResponse.json(
+      { error: "Handle must be 3–20 characters — letters, numbers, underscores, dots, or dashes." },
+      { status: 400 }
+    );
   }
-  if (!body.grade) return NextResponse.json({ error: "Pick your academic stage." }, { status: 400 });
   const age = Math.floor(Number(body.age));
-  if (!Number.isFinite(age) || age < 10 || age > 30) {
-    return NextResponse.json({ error: "Enter a real age between 10 and 30." }, { status: 400 });
+  if (!Number.isInteger(age) || age < 12 || age > 105) {
+    return NextResponse.json({ error: "Enter an age between 12 and 105." }, { status: 400 });
   }
-  if (!body.skills || body.skills.length < 3 || body.skills.length > 5) {
-    return NextResponse.json({ error: "Pick 3 to 5 interests." }, { status: 400 });
+  if (body.email && !/^\S+@\S+\.\S+$/.test(body.email.trim())) {
+    return NextResponse.json({ error: "That email doesn't look valid." }, { status: 400 });
   }
-  if (!body.goal) return NextResponse.json({ error: "Pick your primary goal." }, { status: 400 });
+  if (body.password && body.password.length < 8) {
+    return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+  }
   if (db.users.some((u) => u.handle === handle)) {
     return NextResponse.json({ error: "That handle is taken — try another." }, { status: 409 });
   }
@@ -106,21 +124,34 @@ export async function POST(req: NextRequest) {
     middle: "New here — exploring what I love",
     high: "Student building in public",
     college: "Student building in public",
+    grad: "Grad student in motion",
+    self_taught: "Self-taught and building",
   };
+  const skills = Array.isArray(body.skills)
+    ? (body.skills as unknown[]).filter((s): s is string => typeof s === "string").map((s) => s.trim().replace(/^#/, "")).filter(Boolean).slice(0, 12)
+    : [];
+  const goals = Array.isArray(body.goals)
+    ? (body.goals as unknown[]).filter((g): g is User["goal"] => typeof g === "string").slice(0, 5)
+    : [];
 
   const user: User = {
     id: newId("u"),
     handle,
     name,
-    grade: body.grade,
+    grade: body.grade ?? "high",
     age,
     school: "Independent",
-    headline: headlines[body.grade],
-    skills: body.skills.slice(0, 5),
-    goal: body.goal,
+    headline: headlines[body.grade ?? "high"],
+    skills,
+    goal: goals[0] ?? "Find collaborators",
+    goals: goals.length ? goals : ["Find collaborators"],
+    discoverySource: typeof body.discoverySource === "string" ? body.discoverySource.slice(0, 60) : null,
+    onboardedAt: null, // the post-auth questionnaire sets this
     following: [],
     createdAt: new Date().toISOString(),
   };
+  if (body.email?.trim()) user.email = body.email.trim();
+  if (body.password) user.passwordHash = hashPassword(body.password);
   db.users.push(user);
   await logLogin(user.id);
   await serialize(() => writeDB(db));

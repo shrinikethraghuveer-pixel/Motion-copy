@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { CalendarDays, Hash, MapPin, Search, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -204,8 +205,8 @@ export function SearchBar() {
     setOpen(false);
     setQuery("");
     setCursor(-1);
-    // Wire to real routes as they come online.
-    if (row.kind === "person") window.location.href = `/connect`;
+    // People open their full profile; events/topics keep their index routes.
+    if (row.kind === "person") window.location.assign(`/profile/${encodeURIComponent(row.data.handle)}`);
     else if (row.kind === "event") window.location.href = `/my-space`;
     else window.location.href = `/`;
   }
@@ -291,17 +292,26 @@ export function SearchBar() {
                   <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">People</p>
                   {groups.people.map((r, i) => {
                     const idx = flat.findIndex((f) => f.key === r.key);
+                    const profileHref = `/profile/${encodeURIComponent(r.data.handle)}`;
                     return (
-                      <button
+                      <div
                         key={r.key}
                         data-row={idx}
                         onMouseEnter={() => setCursor(idx)}
-                        onClick={() => select(r)}
                         className={cn(
                           "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors",
                           cursor === idx ? "bg-violet-500/15" : "hover:bg-white/5"
                         )}
                       >
+                        {/* Whole row navigates to the person's profile; Connect stays isolated. */}
+                        <Link
+                          href={profileHref}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpen(false);
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-2.5"
+                        >
                         <span className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-cyan-500 to-violet-600 text-[10px] font-bold text-white">
                           {r.data.initials}
                         </span>
@@ -309,14 +319,14 @@ export function SearchBar() {
                           <span className="block truncate text-sm font-medium text-zinc-100">{r.data.name}</span>
                           <span className="block truncate text-[11px] text-zinc-500">@{r.data.handle}</span>
                         </span>
+                        </Link>
                         {r.data.mutuals > 0 && (
                           <span className="shrink-0 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-cyan-300">
                             {r.data.mutuals} mutual
                           </span>
                         )}
-                        <span
-                          role="button"
-                          tabIndex={-1}
+                        <button
+                          type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             select(r);
@@ -325,8 +335,8 @@ export function SearchBar() {
                         >
                           <UserPlus size={10} className="mr-0.5 inline" />
                           Connect
-                        </span>
-                      </button>
+                        </button>
+                      </div>
                     );
                   })}
                 </>

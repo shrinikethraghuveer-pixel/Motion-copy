@@ -12,6 +12,7 @@ import {
   User,
 } from "lucide-react";
 import { Button } from "@/components/ui/shadcn/button";
+import { MotionLogo } from "@/components/brand/MotionLogo";
 import { getCurrentUserSession, signOut, type SessionUser } from "@/lib/supabase/auth";
 import { cn } from "@/lib/utils";
 
@@ -23,17 +24,6 @@ const NAV = [
   { icon: User, label: "Profile" },
   { icon: Settings, label: "Settings" },
 ];
-
-function GradientLogo({ size = 34 }: { size?: number }) {
-  return (
-    <div
-      className="grid place-items-center rounded-2xl bg-gradient-to-br from-violet-600 via-indigo-500 to-cyan-500 shadow-glow-violet"
-      style={{ width: size, height: size }}
-    >
-      <span className="font-display text-lg font-black text-white">M</span>
-    </div>
-  );
-}
 
 export function NavSidebar() {
   const [session, setSession] = useState<SessionUser | null>(null);
@@ -50,11 +40,9 @@ export function NavSidebar() {
 
   return (
     <aside className="sticky top-0 flex h-screen flex-col gap-2 py-4 pr-2">
-      <div className="mb-2 flex items-center gap-2.5 px-3">
-        <GradientLogo />
-        <span className="font-display hidden text-xl font-bold lg:block">
-          <span className="x-gradient-text">Motion</span>
-        </span>
+      <div className="mb-2 flex items-center px-3">
+        {/* Official lockup: glass icon + themed wordmark image */}
+        <MotionLogo size="md" href="/" />
       </div>
 
       <nav className="flex flex-col gap-1">

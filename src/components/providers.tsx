@@ -1,11 +1,11 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { CheckCircle2, X } from "lucide-react";
 import { api } from "@/lib/client";
 import type { PublicUser } from "@/lib/schema";
 import ComposerModal from "@/components/feed/ComposerModal";
-import ProfileDrawer from "@/components/profile/ProfileDrawer";
 
 interface SessionCtx {
   me: PublicUser | null;
@@ -18,6 +18,8 @@ interface SessionCtx {
   refreshChats: () => Promise<void>;
   quietActive: boolean;
   updateSettings: (patch: Record<string, unknown>) => Promise<boolean>;
+  /** True in dev when no session cookie exists (APIs fall back to the seeded user). */
+  devFallbackSession: boolean;
 }
 
 const SessionContext = createContext<SessionCtx>({
@@ -31,6 +33,7 @@ const SessionContext = createContext<SessionCtx>({
   refreshChats: async () => {},
   quietActive: false,
   updateSettings: async () => false,
+  devFallbackSession: false,
 });
 
 export const useSession = () => useContext(SessionContext);
@@ -59,16 +62,17 @@ let toastSeq = 1;
 export function Providers({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<PublicUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [devFallbackSession, setDevFallbackSession] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [pendingRequests, setPendingRequests] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [composerOpen, setComposerOpen] = useState(false);
-  const [profileHandle, setProfileHandle] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const { user } = await api<{ user: PublicUser | null }>("/api/session");
-      setMe(user);
+      const r = await api<{ user: PublicUser | null; devFallback?: boolean }>("/api/session");
+      setMe(r.user);
+      setDevFallbackSession(Boolean(r.devFallback));
     } catch {
       setMe(null);
     } finally {
@@ -152,12 +156,20 @@ export function Providers({ children }: { children: React.ReactNode }) {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2800);
   }, []);
 
+  const router = useRouter();
   const openComposer = useCallback(() => setComposerOpen(true), []);
-  const openProfile = useCallback((handle: string) => setProfileHandle(handle), []);
+  // Full-page profiles: every avatar/handle click routes to /profile/[username].
+  // Accepts handles ("zoedesigns") and user ids ("u_zoe") — both resolve.
+  const openProfile = useCallback(
+    (handle: string) => {
+      router.push(`/profile/${encodeURIComponent(handle.replace(/^@/, ""))}`);
+    },
+    [router]
+  );
 
   const sessionValue = useMemo(
-    () => ({ me, loading, refresh, signOut, unreadCount, refreshUnread, pendingRequests, refreshChats, quietActive, updateSettings }),
-    [me, loading, refresh, signOut, unreadCount, refreshUnread, pendingRequests, refreshChats, quietActive, updateSettings]
+    () => ({ me, loading, refresh, signOut, unreadCount, refreshUnread, pendingRequests, refreshChats, quietActive, updateSettings, devFallbackSession }),
+    [me, loading, refresh, signOut, unreadCount, refreshUnread, pendingRequests, refreshChats, quietActive, updateSettings, devFallbackSession]
   );
   const uiValue = useMemo(() => ({ toast, openComposer, openProfile }), [toast, openComposer, openProfile]);
 
@@ -166,7 +178,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <UIContext.Provider value={uiValue}>
         {children}
         {composerOpen && <ComposerModal onClose={() => setComposerOpen(false)} />}
-        {profileHandle && <ProfileDrawer handle={profileHandle} onClose={() => setProfileHandle(null)} />}
         <div className="pointer-events-none fixed bottom-6 left-1/2 z-[100] flex -translate-x-1/2 flex-col items-center gap-2">
           {toasts.map((t) => (
             <div key={t.id} className="glass scale-in pointer-events-auto flex items-center gap-2 px-4 py-2.5 text-sm shadow-2xl">

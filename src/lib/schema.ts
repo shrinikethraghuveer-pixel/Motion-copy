@@ -1,6 +1,39 @@
-export type Grade = "middle" | "high" | "college";
-export type Goal = "Find collaborators" | "Discover internships" | "Meet peers";
+export type Grade = "middle" | "high" | "college" | "grad" | "self_taught";
+export type Goal = "Find collaborators" | "Discover internships" | "Meet peers" | "Showcase projects" | "Learn AI workflows";
 export type AgeTag = "<18" | "18+";
+
+/** Onboarding step 1 — academic / life stage options. */
+export const GRADE_OPTIONS: Array<{ key: Grade; label: string; hint: string }> = [
+  { key: "middle", label: "Middle School", hint: "Grades 6–8" },
+  { key: "high", label: "High School", hint: "Grades 9–12" },
+  { key: "college", label: "College / Undergrad", hint: "University" },
+  { key: "grad", label: "Grad School", hint: "Masters / PhD" },
+  { key: "self_taught", label: "Self-Taught / Professional", hint: "Learning on your own" },
+];
+
+/** Onboarding step 3 — multi-select goals. */
+export const GOAL_OPTIONS_MULTI: Goal[] = [
+  "Find collaborators",
+  "Discover internships",
+  "Meet peers",
+  "Showcase projects",
+  "Learn AI workflows",
+];
+
+/** Onboarding step 4 — discovery / analytics channel. */
+export const DISCOVERY_SOURCES = [
+  "X (Twitter)",
+  "Instagram / TikTok",
+  "YouTube / Podcast",
+  "Friend or Colleague",
+  "Search Engine / Google",
+  "Community / Discord",
+] as const;
+
+/** User-friendly labels for the Grade union (profile pages, settings). */
+export const GRADE_LABELS: Record<Grade, string> = Object.fromEntries(
+  GRADE_OPTIONS.map((g) => [g.key, g.label])
+) as Record<Grade, string>;
 
 export const SKILL_OPTIONS = [
   "Coding",
@@ -135,6 +168,12 @@ export interface User {
   headline: string;
   skills: string[];
   goal: Goal;
+  /** All onboarding goals (multi-select); `goal` above stays the primary for legacy surfaces. */
+  goals?: Goal[];
+  /** Analytics: where this user heard about Motion. */
+  discoverySource?: string | null;
+  /** Set when the onboarding questionnaire is completed (or skipped). */
+  onboardedAt?: string | null;
   following: string[];
   createdAt: string;
   settings?: UserSettings;

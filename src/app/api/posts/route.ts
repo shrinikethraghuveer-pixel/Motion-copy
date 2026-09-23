@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const tab = searchParams.get("tab") ?? "for-you";
   const authorHandle = searchParams.get("author");
+  const communityId = searchParams.get("community");
 
   const author = authorHandle ? db.users.find((u) => u.handle === authorHandle) : null;
   if (authorHandle && !author) return bad("Author not found.", 404);
@@ -32,8 +33,17 @@ export async function GET(req: NextRequest) {
   };
 
   let list = [...db.posts].filter((p) => !authorHidden(p.authorId));
-  if (tab === "circle") {
+  if (tab === "circle" || tab === "following") {
     list = list.filter((p) => friendIds.has(p.authorId) || p.authorId === me.id);
+  } else if (tab === "communities") {
+    const community = db.groups.find((group) => group.id === communityId && group.members.some((member) => member.userId === me.id));
+    if (!community) {
+      list = [];
+    } else {
+      const memberIds = new Set(community.members.map((member) => member.userId));
+      const tag = community.tag.toLowerCase();
+      list = list.filter((post) => memberIds.has(post.authorId) || post.text.toLowerCase().includes(tag));
+    }
   } else if (tab === "saved") {
     list = list.filter((p) => p.savedBy.includes(me.id));
   } else if (tab === "author") {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   Bookmark,
   CalendarPlus,
@@ -122,16 +123,33 @@ function CommentBox({ post, onAdded }: { post: FeedPost; onAdded: (p: FeedPost) 
 
   return (
     <div className="mt-3 space-y-2 border-t border-edge pt-3">
-      {post.comments.map((c) => (
-        <div key={c.id} className="flex gap-2 text-sm">
-          <span className="mt-0.5"><Avatar user={{ id: c.authorId, name: c.authorId }} size={22} /></span>
-          <div>
-            <span className="font-medium text-ink/90">{c.authorId.replace("u_", "")}</span>{" "}
-            <span className="text-ink/80">{c.text}</span>{" "}
-            <span className="text-xs text-mist">{timeAgo(c.createdAt)}</span>
+      {post.comments.map((c) => {
+        const commenterHandle = c.authorId.replace("u_", "").toLowerCase();
+        return (
+          <div key={c.id} className="flex gap-2 text-sm">
+            {/* Commenter avatar + name → their profile. */}
+            <Link
+              href={`/profile/${encodeURIComponent(commenterHandle)}`}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-0.5 shrink-0"
+              aria-label={`Open ${commenterHandle}'s profile`}
+            >
+              <Avatar user={{ id: c.authorId, name: c.authorId }} size={22} />
+            </Link>
+            <div>
+              <Link
+                href={`/profile/${encodeURIComponent(commenterHandle)}`}
+                onClick={(e) => e.stopPropagation()}
+                className="font-medium text-ink/90 hover:text-gold hover:underline"
+              >
+                {c.authorId.replace("u_", "")}
+              </Link>{" "}
+              <span className="text-ink/80">{c.text}</span>{" "}
+              <span className="text-xs text-mist">{timeAgo(c.createdAt)}</span>
+            </div>
           </div>
-        </div>
-    ))}
+        );
+      })}
       <div className="flex gap-2">
         <input
           value={text}
@@ -158,6 +176,7 @@ export default function PostCard({ post, onChange, onOpenProfile }: { post: Feed
   const [reportDone, setReportDone] = useState(false);
 
   const author = post.author;
+  const authorHref = `/profile/${encodeURIComponent(author.handle)}`;
 
   const act = async (action: "like" | "repost" | "save") => {
     if (action === "like") setPop(true);
@@ -193,19 +212,36 @@ export default function PostCard({ post, onChange, onOpenProfile }: { post: Feed
   return (
     <article className="glass fade-up p-5">
       <header className="flex items-start gap-3">
-        <button onClick={() => (onOpenProfile ? onOpenProfile(author.handle) : openProfile(author.handle))}>
+        {/* Avatar + name navigate to the author's profile; isolated from post actions. */}
+        <Link
+          href={authorHref}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Open ${author.name}'s profile`}
+          className="shrink-0"
+        >
           <Avatar user={author} size={44} ring={author.isSelf} />
-        </button>
+        </Link>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <button onClick={() => (onOpenProfile ? onOpenProfile(author.handle) : openProfile(author.handle))} className="font-display font-semibold hover:text-gold">
+            <Link
+              href={authorHref}
+              onClick={(e) => e.stopPropagation()}
+              className="font-display font-semibold hover:text-gold"
+            >
               {author.name}
-            </button>
+            </Link>
             {post.type === "opportunity" && <PulseBadge label="Pulse" />}
             <Chip tone={author.ageTag === "18+" ? "ice" : "gold"}>{author.ageTag}</Chip>
           </div>
           <p className="text-xs text-mist">
-            @{author.handle} · {timeAgo(post.createdAt)}
+            <Link
+              href={authorHref}
+              onClick={(e) => e.stopPropagation()}
+              className="font-mono hover:text-gold hover:underline"
+            >
+              @{author.handle}
+            </Link>{" "}
+            · {timeAgo(post.createdAt)}
             {post.type === "opportunity" && <span className="text-gold/80"> · Opportunity</span>}
           </p>
         </div>

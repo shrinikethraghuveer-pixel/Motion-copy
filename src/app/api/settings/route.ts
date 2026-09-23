@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { bad, json, persist, readBody, requireUser, withSettings } from "@/lib/server";
 import { clearSession, getSessionToken, newId } from "@/lib/session";
 import { hashPassword, verifyPassword } from "@/lib/auth";
-import { DEFAULT_SETTINGS, type Audience, type DB, type ThemePref, type TextSize, type DisplayFont } from "@/lib/schema";
+import { DEFAULT_SETTINGS, GOAL_OPTIONS_MULTI, type Audience, type DB, type Goal, type ThemePref, type TextSize, type DisplayFont } from "@/lib/schema";
 
 /* ---------- helpers ---------- */
 
@@ -89,6 +89,51 @@ export async function PATCH(req: NextRequest) {
     if (body.photo.length > 300_000) return bad("Photo is too large — pick something under ~200KB.", 413);
     me.photo = body.photo || undefined;
   }
+  if (Array.isArray(body.skills)) {
+    const skills = (body.skills as unknown[])
+      .filter((s): s is string => typeof s === "string")
+      .map((s) => s.trim().replace(/^#/, ""))
+      .filter(Boolean)
+      .slice(0, 12);
+    if (skills.some((s) => s.length > 30)) return bad("Each skill must be 30 characters or fewer.");
+    me.skills = skills;
+  }
+
+  // --- Onboarding questionnaire ---
+  if (typeof body.grade === "string") {
+    const valid = ["middle", "high", "college", "grad", "self_taught"];
+    if (!valid.includes(body.grade)) return bad("Unknown academic stage.");
+    me.grade = body.grade as typeof me.grade;
+    // Keep the profile headline coherent with the chosen stage.
+    const headlines: Record<typeof me.grade, string> = {
+      middle: "New here — exploring what I love",
+      high: "Student building in public",
+      college: "Student building in public",
+      grad: "Grad student in motion",
+      self_taught: "Self-taught and building",
+    };
+    me.headline = headlines[me.grade];
+  }
+  if (body.age !== undefined) {
+    const age = Math.floor(Number(body.age));
+    if (!Number.isInteger(age) || age < 12 || age > 105) return bad("Enter an age between 12 and 105.");
+    me.age = age;
+  }
+  if (Array.isArray(body.goals)) {
+    const valid = new Set<string>(GOAL_OPTIONS_MULTI);
+    const goals = (body.goals as unknown[]).filter((g): g is Goal =>
+      typeof g === "string" && valid.has(g)
+    );
+    if (body.goals.length && !goals.length) return bad("Unknown goal option.");
+    me.goals = goals;
+    if (goals.length && !goals.includes(me.goal)) me.goal = goals[0];
+  }
+  if ("discoverySource" in body) {
+    me.discoverySource = typeof body.discoverySource === "string" && body.discoverySource.trim()
+      ? body.discoverySource.trim().slice(0, 60)
+      : null;
+  }
+  if (body.completeOnboarding === true) me.onboardedAt = new Date().toISOString();
 
   // --- Privacy ---
   if (typeof body.privateProfile === "boolean") s.privateProfile = body.privateProfile;

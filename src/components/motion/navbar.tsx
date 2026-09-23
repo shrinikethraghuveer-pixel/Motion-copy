@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import SearchBar from "@/components/motion/search";
 import ThemeToggle from "@/components/motion/theme-toggle";
+import { useSession } from "@/components/providers";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -77,9 +78,43 @@ export function Navbar({
 }) {
   const pathname = usePathname();
   const active = activeNavKey(pathname);
+  const { me } = useSession();
+  const ownProfileHref = me?.handle ? `/profile/${encodeURIComponent(me.handle)}` : "/profile";
 
   return (
     <>
+      {/* ================= mobile: slim floating top bar ================= */}
+      <header
+        className={cn(
+          "fixed left-1/2 top-3 z-40 flex w-[min(96%,40rem)] -translate-x-1/2 items-center gap-2 rounded-2xl px-3 py-2 lg:hidden",
+          GLASS
+        )}
+      >
+        <Link href="/" aria-label="Motion home" className="shrink-0">
+          <Image src="/logo.png" alt="Motion" width={30} height={30} className="object-contain" priority />
+        </Link>
+        <div className="min-w-0 flex-1">
+          <SearchBar />
+        </div>
+        <span className="shrink-0">
+          <ThemeToggle />
+        </span>
+        {/* Own avatar → own profile page. */}
+        <Link
+          href={ownProfileHref}
+          aria-label="Open your profile"
+          title={me ? `@${me.handle}` : "Your profile"}
+          className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-full border border-zinc-200/80 bg-gradient-to-br from-cyan-500 to-violet-600 text-[11px] font-bold text-white transition-all duration-200 hover:border-violet-500/50 dark:border-white/10"
+        >
+          {me?.photo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={me.photo} alt={me.name} className="h-full w-full object-cover" />
+          ) : (
+            <span aria-hidden="true">{me?.name?.slice(0, 1).toUpperCase() ?? "M"}</span>
+          )}
+        </Link>
+      </header>
+
       {/* ================= desktop: floating glass top bar ================= */}
       <header className={cn("fixed left-1/2 top-3 z-40 hidden w-[min(96rem,94%)] -translate-x-1/2 rounded-2xl lg:block", GLASS)}>
         <div className="flex h-14 items-center gap-4 px-5">
@@ -135,13 +170,21 @@ export function Navbar({
             <GlowButton onClick={onAssistant} label="AI Assistant">
               <Sparkles size={16} />
             </GlowButton>
-            <button
-              onClick={onProfile}
-              aria-label="Open profile"
-              className="size-9 overflow-hidden rounded-full border border-zinc-200/80 bg-gradient-to-br from-cyan-500 to-violet-600 text-xs font-bold text-white transition-all duration-200 hover:border-violet-500/50 hover:shadow-[0_0_18px_rgba(139,92,246,0.35)] dark:border-white/10"
+            {/* Own avatar → own profile page. */}
+            <Link
+              href={ownProfileHref}
+              onClick={onProfile ? (e) => e.stopPropagation() : undefined}
+              aria-label="Open your profile"
+              title={me ? `@${me.handle}` : "Your profile"}
+              className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-zinc-200/80 bg-gradient-to-br from-cyan-500 to-violet-600 text-xs font-bold text-white transition-all duration-200 hover:border-violet-500/50 hover:shadow-[0_0_18px_rgba(139,92,246,0.35)] dark:border-white/10"
             >
-              M
-            </button>
+              {me?.photo ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={me.photo} alt={me.name} className="h-full w-full object-cover" />
+              ) : (
+                <span aria-hidden="true">{me?.name?.slice(0, 1).toUpperCase() ?? "M"}</span>
+              )}
+            </Link>
           </div>
         </div>
       </header>

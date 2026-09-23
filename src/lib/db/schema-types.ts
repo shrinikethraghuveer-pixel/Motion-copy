@@ -19,6 +19,14 @@ export interface Profile {
   feed_vibe: string | null;
   onboarding_completed: boolean;
   created_at: string;
+  /** 0003 rich fields powering /profile/[username] + Edit Profile modal. */
+  cover_url: string | null;
+  headline: string | null;
+  location: string | null;
+  website_url: string | null;
+  github_url: string | null;
+  linkedin_url: string | null;
+  tech_stack: string[];
 }
 
 export interface ProfileInsert {
@@ -33,6 +41,13 @@ export interface ProfileInsert {
   goal?: string | null;
   feed_vibe?: string | null;
   onboarding_completed?: boolean;
+  cover_url?: string | null;
+  headline?: string | null;
+  location?: string | null;
+  website_url?: string | null;
+  github_url?: string | null;
+  linkedin_url?: string | null;
+  tech_stack?: string[];
 }
 
 export type ProfileUpdate = Partial<Omit<ProfileInsert, "id">>;
@@ -111,3 +126,59 @@ export interface Database {
 export type FeedPostRow = Post & {
   profiles: Pick<Profile, "id" | "username" | "full_name" | "display_name" | "avatar_url"> | null;
 };
+
+/** Full profile row fetched with the "*" column selector on /profile/[username]. */
+export type ProfileRow = Profile;
+
+/** A post + author + viewer flags, as returned by fetchProfilePosts. */
+export interface ProfilePostRow {
+  id: string;
+  user_id: string;
+  content: string;
+  media_url: string | null;
+  likes_count: number;
+  reposts_count: number;
+  replies_count: number;
+  created_at: string;
+  liked_by_me: boolean;
+  profiles: Pick<Profile, "id" | "username" | "full_name" | "display_name" | "avatar_url"> | null;
+}
+
+/** Extended profile-post row with media + save flag (see lib/db/profiles.ts). */
+export interface ProfilePagePostRow extends ProfilePostRow {
+  saved_by_me: boolean;
+  media: { seed: string; label: string } | null;
+}
+
+/** Aggregated stats powering the profile metrics bar. */
+export interface ProfileStats {
+  followers: number;
+  following: number;
+  projects: number;
+  upvotes: number;
+}
+
+/** Shape followed/unfollow state. */
+export interface FollowState {
+  followers: number;
+  following: number;
+  isFollowing: boolean;
+  isFollowedBy: boolean;
+}
+
+/** Everything /profile/[username] renders in one payload. */
+export interface ProfilePageData {
+  profile: ProfileRow;
+  posts: ProfilePagePostRow[];
+  liked: ProfilePagePostRow[];
+  saved: ProfilePagePostRow[];
+  stats: ProfileStats;
+  follow: FollowState;
+  isSelf: boolean;
+  locked: boolean;
+  source: "supabase" | "local";
+  /** Legacy-store extras surfaced as profile metadata. */
+  school: string | null;
+  goal: string | null;
+  interests: string[];
+}

@@ -53,16 +53,18 @@ export async function middleware(request: NextRequest) {
     pathname === "/" ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/welcome") ||
+    pathname.startsWith("/signup") ||
     PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
   const isProtected = PROTECTED_ROUTES.some(
     (p) => pathname === p || pathname.startsWith(p + "/")
   );
 
   if (!user && !legacySession && !isPublic) {
+    // New / logged-out visitors land on the welcome page, not the old shell.
     const url = request.nextUrl.clone();
-    url.pathname = isProtected ? "/login" : "/";
+    url.pathname = "/welcome";
     url.search = "";
-    url.searchParams.set("next", pathname);
+    if (isProtected) url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 

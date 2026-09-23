@@ -8,7 +8,7 @@ export interface AuthResult {
   magicLinkSent?: boolean;
 }
 
-/** Row shape of the public.profiles table (migration 0001 + 0002). */
+/** Row shape of the public.profiles table (migration 0001 + 0002 + 0003). */
 export interface Profile {
   id: string;
   username: string;
@@ -22,6 +22,14 @@ export interface Profile {
   feed_vibe: string | null;
   onboarding_completed: boolean;
   created_at: string;
+  /** Rich profile fields (0003) — optional so older cached payloads still typecheck. */
+  cover_url?: string | null;
+  headline?: string | null;
+  location?: string | null;
+  website_url?: string | null;
+  github_url?: string | null;
+  linkedin_url?: string | null;
+  tech_stack?: string[];
 }
 
 export interface SessionUser {

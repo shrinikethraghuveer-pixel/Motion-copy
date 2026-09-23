@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @custom-variant dark (&:where(html:not([data-theme="light"]) *));
+@custom-variant light (&:where(html[data-theme="light"] *));
 @config "../../tailwind.config.js";
 
 /* ================= Ambient mesh gradient — subtle pulsing violet/indigo radials

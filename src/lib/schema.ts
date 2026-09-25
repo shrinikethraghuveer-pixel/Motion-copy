@@ -108,6 +108,12 @@ export interface UserSettings {
   highContrast: boolean;
   language: string;
   timezone: string;
+  accentColor: string;
+  lowSpecMode: boolean;
+  aiPostSharpening: boolean;
+  aiSmartRanking: boolean;
+  aiDefaultModel: string;
+  emailDigest: "off" | "daily" | "weekly";
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
@@ -145,6 +151,12 @@ export const DEFAULT_SETTINGS: UserSettings = {
   highContrast: false,
   language: "en",
   timezone: "system",
+  accentColor: "#7c3aed",
+  lowSpecMode: false,
+  aiPostSharpening: true,
+  aiSmartRanking: true,
+  aiDefaultModel: "openai/gpt-oss-20b",
+  emailDigest: "weekly",
 };
 
 /** Which NotificationPrefs key each notification type maps to. */
@@ -178,6 +190,8 @@ export interface User {
   createdAt: string;
   settings?: UserSettings;
   photo?: string;
+  banner?: string;
+  bio?: string;
   email?: string;
   phone?: string;
   passwordHash?: string;
@@ -214,6 +228,27 @@ export interface EventMeta {
   date: string;
   location: string;
   kind: EventKind;
+  endTime?: string;
+  durationMinutes?: number;
+  capacity?: number | null;
+  category?: string;
+  attendeeIds?: string[];
+  posterUrl?: string | null;
+}
+
+export interface PollOption {
+  id: string;
+  text: string;
+  votes: string[];
+}
+
+export interface PollMeta {
+  question: string;
+  options: PollOption[];
+  duration: string;
+  multipleChoice: boolean;
+  hideResults: boolean;
+  totalVotes: number;
 }
 
 export interface PostMedia {
@@ -225,9 +260,11 @@ export interface PostMedia {
 export interface Post {
   id: string;
   authorId: string;
-  type: "social" | "opportunity";
+  type: "social" | "opportunity" | "poll";
   text: string;
   media: PostMedia | null;
+  mediaUrls?: string[];
+  poll?: PollMeta | null;
   likes: string[];
   reposts: string[];
   comments: Comment[];
@@ -255,12 +292,46 @@ export interface Chat {
   updatedAt: string;
 }
 
+/** Group chat for the Messages view (legacy store mirror of group_chats/group_members). */
+export interface DmGroup {
+  id: string;
+  name: string;
+  description: string;
+  avatarUrl: string | null;
+  createdBy: string;
+  members: Array<{ userId: string; role: "admin" | "member"; joinedAt: string }>;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type GroupRole = "admin" | "moderator" | "member";
 
 export interface GroupMember {
   userId: string;
   role: GroupRole;
   joinedAt: string;
+}
+
+export interface GroupJoinRequest {
+  userId: string;
+  requestedAt: string;
+}
+
+export interface GroupReply {
+  id: string;
+  authorId: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface GroupDiscussionPost {
+  id: string;
+  authorId: string;
+  text: string;
+  createdAt: string;
+  pinned: boolean;
+  replies: GroupReply[];
 }
 
 export interface Group {
@@ -271,6 +342,11 @@ export interface Group {
   school: string | null;
   createdAt: string;
   members: GroupMember[];
+  visibility?: "public" | "private";
+  avatarUrl?: string | null;
+  tags?: string[];
+  joinRequests?: GroupJoinRequest[];
+  posts?: GroupDiscussionPost[];
 }
 
 export type NotificationType = "connect" | "accept" | "like" | "comment" | "repost" | "event";
@@ -298,6 +374,7 @@ export interface DB {
   users: User[];
   connections: Connection[];
   chats: Chat[];
+  dmGroups: DmGroup[];
   posts: Post[];
   groups: Group[];
   notifications: Notification[];

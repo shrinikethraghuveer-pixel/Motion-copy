@@ -13,7 +13,7 @@ const PUBLIC_PREFIXES = ["/api", "/_next", "/favicon"];
 const LEGACY_SESSION_COOKIE = "motion_session";
 
 /** Routes that require a Supabase session (or legacy demo cookie). */
-const PROTECTED_ROUTES = ["/home", "/settings", "/profile", "/explore", "/notifications", "/chat", "/my-space", "/connect", "/connections", "/onboarding"];
+const PROTECTED_ROUTES = ["/home", "/settings", "/profile", "/explore", "/notifications", "/chat", "/my-space", "/connect", "/connections", "/onboarding", "/admin"];
 
 export async function middleware(request: NextRequest) {
   // Local UI development should not be gated by Supabase or legacy cookies.
@@ -51,6 +51,8 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublic =
     pathname === "/" ||
+    pathname === "/terms" ||
+    pathname === "/privacy" ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/welcome") ||
     pathname.startsWith("/signup") ||

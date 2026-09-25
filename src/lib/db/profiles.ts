@@ -32,7 +32,7 @@ function hasSupabaseEnv(): boolean {
 }
 
 function normalizeUsername(raw: string): string {
-  return decodeURIComponent(raw).replace(/^@/, "").trim();
+  return decodeURIComponent(raw).replace(/^@+/, "").trim();
 }
 
 /** True when the token looks like a user id ("u_zoe" / uuid) rather than a handle. */
@@ -206,7 +206,8 @@ export function mapLegacyToProfilePage(data: ProfilePayload): ProfilePageData {
       feed_vibe: null,
       onboarding_completed: true,
       created_at: user.createdAt,
-      cover_url: null,
+      cover_url: user.banner ?? null,
+      banner_url: user.banner ?? null,
       headline: user.headline,
       location: user.school || null,
       website_url: null,
@@ -275,6 +276,7 @@ export interface ProfileUpdatePatch {
   tech_stack?: string[];
   avatar_url?: string | null;
   cover_url?: string | null;
+  banner_url?: string | null;
 }
 
 /**
@@ -290,6 +292,7 @@ export async function updateOwnProfile(patch: ProfileUpdatePatch): Promise<Profi
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Sign in to edit your profile.");
 
+      const bannerUrl = patch.banner_url !== undefined ? patch.banner_url : patch.cover_url;
       const { data, error } = await supabase
         .from("profiles")
         .update({
@@ -302,7 +305,7 @@ export async function updateOwnProfile(patch: ProfileUpdatePatch): Promise<Profi
           linkedin_url: patch.linkedin_url ?? null,
           tech_stack: patch.tech_stack ?? [],
           ...(patch.avatar_url !== undefined ? { avatar_url: patch.avatar_url } : {}),
-          ...(patch.cover_url !== undefined ? { cover_url: patch.cover_url } : {}),
+          ...(bannerUrl !== undefined ? { cover_url: bannerUrl, banner_url: bannerUrl } : {}),
         })
         .eq("id", user.id)
         .select(PROFILE_SELECT)
@@ -319,6 +322,7 @@ export async function updateOwnProfile(patch: ProfileUpdatePatch): Promise<Profi
   if (patch.display_name !== undefined) body.name = patch.display_name;
   if (patch.headline !== undefined) body.headline = patch.headline ?? "";
   if (patch.avatar_url !== undefined) body.photo = patch.avatar_url;
+  if (patch.banner_url !== undefined || patch.cover_url !== undefined) body.banner = patch.banner_url ?? patch.cover_url;
   if (patch.tech_stack !== undefined) body.skills = patch.tech_stack;
   if (Object.keys(body).length > 0) {
     await api("/api/settings", { method: "PATCH", body: JSON.stringify(body) });
@@ -443,12 +447,33 @@ export async function uploadProfileImage(file: File, kind: "avatar" | "cover"): 
 
   const { error } = await supabase.storage.from(bucket).upload(path, file, {
     cacheControl: "3600",
+    contentType: file.type,
     upsert: false,
   });
   if (error) throw new Error(error.message);
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   return data.publicUrl;
+}
+
+/** Upload a composer attachment to the public post-media bucket. */
+export async function uploadPostMedia(file: File): Promise<string> {
+  if (!hasSupabaseEnv()) {
+    if (file.size > 2_000_000) throw new Error("Local post attachments must be under 2 MB.");
+    return fileToDataUrl(file);
+  }
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Sign in to attach media.");
+  const ext = (file.name.split(".").pop() ?? "bin").replace(/[^a-z0-9]/gi, "").slice(0, 8) || "bin";
+  const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const { error } = await supabase.storage.from("post-media").upload(path, file, {
+    cacheControl: "3600",
+    contentType: file.type || "application/octet-stream",
+    upsert: false,
+  });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
 }
 
 function fileToDataUrl(file: File): Promise<string> {

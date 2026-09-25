@@ -106,10 +106,13 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const age = Math.floor(Number(body.age));
-  if (!Number.isInteger(age) || age < 12 || age > 105) {
+  // Core signup deliberately collects only identity and credentials. Age is
+  // optional until onboarding; use a safe default for existing profile logic.
+  const suppliedAge = body.age === undefined || body.age === null ? null : Math.floor(Number(body.age));
+  if (suppliedAge !== null && (!Number.isInteger(suppliedAge) || suppliedAge < 12 || suppliedAge > 105)) {
     return NextResponse.json({ error: "Enter an age between 12 and 105." }, { status: 400 });
   }
+  const age = suppliedAge ?? 16;
   if (body.email && !/^\S+@\S+\.\S+$/.test(body.email.trim())) {
     return NextResponse.json({ error: "That email doesn't look valid." }, { status: 400 });
   }

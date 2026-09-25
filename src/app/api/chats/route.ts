@@ -2,14 +2,36 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { bad, persist, readBody, requireUser, toPublicUser, withSettings } from "@/lib/server";
 import { newId } from "@/lib/session";
-import type { Chat, ChatMessage, Notification } from "@/lib/schema";
+import type { Chat, ChatMessage, DB, User } from "@/lib/schema";
+import { screenUserText } from "@/lib/moderation";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
-/** GET /api/chats — thread summaries incl. pending Message Requests. */
-export async function GET() {
+/**
+ * GET /api/chats?chatId=… — full message history for one conversation.
+ * The floating messaging drawer fetches this when a thread is opened.
+ */
+export async function GET(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
 
+  const chatId = req.nextUrl.searchParams.get("chatId");
+  if (chatId) {
+    const chat = db.chats.find((c) => c.id === chatId && c.participantIds.includes(me.id));
+    if (!chat) return bad("Conversation not found.", 404);
+    return NextResponse.json({
+      chatId: chat.id,
+      status: chat.status,
+      requestedByMe: chat.requestedBy === me.id,
+      messages: chat.messages,
+    });
+  }
+
+  return threadSummaries(me, db);
+}
+
+/** Thread summaries incl. pending Message Requests. */
+function threadSummaries(me: User, db: DB) {
   const threads = db.chats
     .filter((c) => c.participantIds.includes(me.id) && c.status !== "declined")
     .map((c) => {
@@ -37,6 +59,8 @@ export async function POST(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
+  const rate = await rateLimit(req, "chat-write", me.id, 20, 60);
+  if (!rate.allowed) return rateLimitResponse(rate.retryAfter);
   const body = await readBody<{ targetHandle?: string; chatId?: string; text?: string; action?: "send" | "accept" | "decline" }>(req);
   const action = body.action ?? "send";
 
@@ -45,6 +69,9 @@ export async function POST(req: NextRequest) {
   if (action === "send") {
     const text = (body.text ?? "").trim();
     if (!text) return bad("Message can't be empty.");
+    if (text.length > 4000) return bad("Messages are limited to 4,000 characters.", 413);
+    const screening = screenUserText(text);
+    if (!screening.allowed) return bad(screening.reason, 422);
 
     if (body.chatId) {
       chat = db.chats.find((c) => c.id === body.chatId && c.participantIds.includes(me.id));
@@ -53,14 +80,16 @@ export async function POST(req: NextRequest) {
       const otherId = chat.participantIds.find((p) => p !== me.id);
       const other = otherId ? db.users.find((u) => u.id === otherId) : undefined;
       if (other?.deactivatedAt) return bad("This account is no longer active.", 403);
-      if (other && withSettings(other).blocked.includes(me.id)) return bad("You can't message this user.", 403);
+      if (other && (withSettings(other).blocked.includes(me.id) || withSettings(me).blocked.includes(other.id))) return bad("You can't message this user.", 403);
+      if (other && withSettings(other).allowDMs === "no_one") return bad("This student has direct messages turned off.", 403);
+      if (other && withSettings(other).allowDMs === "connections" && !db.connections.some(c=>c.status==="accepted"&&((c.requesterId===me.id&&c.targetId===other.id)||(c.requesterId===other.id&&c.targetId===me.id)))) return bad("Only connections can message this student.",403);
     } else {
       const target = db.users.find((u) => u.handle === body.targetHandle);
       if (!target) return bad("User not found.", 404);
       if (target.id === me.id) return bad("You can't message yourself.");
       if (target.deactivatedAt) return bad("This account is no longer active.", 403);
       const targetSettings = withSettings(target);
-      if (targetSettings.blocked.includes(me.id)) return bad("You can't message this user.", 403);
+      if (targetSettings.blocked.includes(me.id) || withSettings(me).blocked.includes(target.id)) return bad("You can't message this user.", 403);
       if (targetSettings.allowDMs === "no_one") return bad("This student has direct messages turned off.", 403);
       const alreadyConnected = db.connections.some(
         (c) =>

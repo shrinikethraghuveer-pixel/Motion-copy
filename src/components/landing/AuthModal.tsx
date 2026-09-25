@@ -8,14 +8,14 @@ import CoreAuthCard from "@/components/auth/CoreAuthCard";
  * The demo-account toggle is gone: one clean path — create account, then the
  * post-auth /onboarding questionnaire personalizes the experience.
  */
-export default function AuthModal({ onClose }: { onClose: () => void }) {
+export default function AuthModal({ onClose, initialMode = "signup" }: { onClose: () => void; initialMode?: "signin" | "signup" }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Create your Motion account"
+      aria-label={initialMode === "signup" ? "Create your Motion account" : "Sign in to Motion"}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -28,7 +28,7 @@ export default function AuthModal({ onClose }: { onClose: () => void }) {
         >
           <X size={18} />
         </button>
-        <CoreAuthCard />
+        <CoreAuthCard initialMode={initialMode} />
       </div>
     </div>
   );

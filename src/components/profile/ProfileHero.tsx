@@ -35,14 +35,14 @@ export function ProfileAvatar({
   if (user.avatar_url) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={user.avatar_url} alt={user.name} className={`rounded-full object-cover ${className}`} />
+      <img src={user.avatar_url} alt={user.name} className={`aspect-square rounded-full object-cover ${className}`} />
     );
   }
   const { from, to } = gradientFor(user.id);
   return (
     <span
       aria-hidden="true"
-      className={`flex items-center justify-center rounded-full font-bold ${className}`}
+      className={`aspect-square flex items-center justify-center rounded-full font-bold ${className}`}
       style={{
         background: `linear-gradient(135deg, hsl(${from} 70% 55%), hsl(${to} 70% 45%))`,
         color: "#0b1329",
@@ -66,6 +66,7 @@ export default function ProfileHero({ data, busy, onEdit, onToggleFollow, onMess
   const { profile, stats, follow, isSelf } = data;
   const displayName = profile.display_name || profile.full_name || profile.username;
   const headline = profile.headline || data.goal || "";
+  const bannerUrl = profile.banner_url || profile.cover_url;
 
   const joined = useMemo(() => {
     const d = new Date(profile.created_at);
@@ -80,9 +81,9 @@ export default function ProfileHero({ data, busy, onEdit, onToggleFollow, onMess
     <section className={`${GLASS_CARD} relative overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300`}>
       {/* ── A. Cover banner ─────────────────────────────────────────────── */}
       <div className="light:bg-gradient-to-r light:from-violet-600/30 light:to-cyan-500/30 dark:from-violet-600/25 dark:to-cyan-500/25 dark:bg-gradient-to-r relative h-44 w-full sm:h-56">
-        {profile.cover_url ? (
+        {bannerUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={profile.cover_url} alt="" className="h-full w-full object-cover" />
+          <img src={bannerUrl} alt="" className="h-full w-full object-cover" />
         ) : (
           <>
             <span className="pointer-events-none absolute -right-14 -top-16 h-52 w-52 rounded-full bg-violet-500/20 blur-3xl" />

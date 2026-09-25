@@ -15,6 +15,7 @@ export default function ProfileIndexPage() {
   useEffect(() => {
     if (loading) return;
     if (me?.handle) router.replace(`/profile/${encodeURIComponent(me.handle)}`);
+    else if (me) router.replace("/onboarding");
   }, [loading, me, router]);
 
   return (

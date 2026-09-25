@@ -3,6 +3,27 @@ import { NextResponse } from "next/server";
 import { bad, json, persist, readBody, requireUser, shouldNotify, toPublicUser, withSettings } from "@/lib/server";
 import { newId } from "@/lib/session";
 import type { Notification } from "@/lib/schema";
+import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
+
+async function syncSupabaseConnection(action:"pending"|"accepted"|"remove",targetHandle:string){
+  if(!process.env.NEXT_PUBLIC_SUPABASE_URL||!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)return null;
+  try{
+    const supabase=await createSupabaseServerClient();
+    const {data:{user}}=await supabase.auth.getUser();if(!user)return null;
+    const {data:target,error:lookupError}=await supabase.from("profiles").select("id").ilike("username",targetHandle).maybeSingle();
+    if(lookupError)return lookupError.message;if(!target)return "Connection profile was not found.";
+    if(action==="remove"||action==="accepted"){
+      const {error}=await supabase.from("connections").delete().eq("requester_id",target.id).eq("target_id",user.id);
+      if(error)return error.message;
+    }
+    if(action==="remove"){
+      const {error}=await supabase.from("connections").delete().eq("requester_id",user.id).eq("target_id",target.id);
+      return error?.message??null;
+    }
+    const {error}=await supabase.from("connections").upsert({requester_id:user.id,target_id:target.id,status:action},{onConflict:"requester_id,target_id"});
+    return error?.message??null;
+  }catch(error){return error instanceof Error?error.message:"Could not sync connection.";}
+}
 
 export async function GET() {
   const auth = await requireUser();
@@ -63,6 +84,8 @@ export async function POST(req: NextRequest) {
       db.notifications.unshift(n);
     }
     await persist(db);
+    const syncError = await syncSupabaseConnection("pending", target.handle);
+    if (syncError) return bad(`Connection update failed: ${syncError}`, 502);
     return json({ state: "pending_out" });
   }
 
@@ -70,11 +93,15 @@ export async function POST(req: NextRequest) {
     const existing = link();
     if (!existing || existing.status !== "pending") return bad("No pending request.", 404);
     existing.status = "accepted";
+    const requester = db.users.find((u) => u.id === existing.requesterId);
+    if (!requester) return bad("User not found.", 404);
     if (shouldNotify(db, existing.requesterId, "accept")) {
       const n: Notification = { id: newId("n"), userId: existing.requesterId, type: "accept", actorId: me.id, postId: null, text: null, read: false, createdAt: new Date().toISOString() };
       db.notifications.unshift(n);
     }
     await persist(db);
+    const syncError = await syncSupabaseConnection("accepted", requester.handle);
+    if (syncError) return bad(`Connection update failed: ${syncError}`, 502);
     return json({ state: "connected" });
   }
 
@@ -82,6 +109,8 @@ export async function POST(req: NextRequest) {
     const i = db.connections.findIndex(link);
     if (i >= 0) db.connections.splice(i, 1);
     await persist(db);
+    const syncError = await syncSupabaseConnection("remove", target.handle);
+    if (syncError) return bad(`Connection update failed: ${syncError}`, 502);
     return json({ state: "none" });
   }
 

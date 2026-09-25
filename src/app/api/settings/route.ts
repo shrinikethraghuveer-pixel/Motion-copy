@@ -4,6 +4,173 @@ import { bad, json, persist, readBody, requireUser, withSettings } from "@/lib/s
 import { clearSession, getSessionToken, newId } from "@/lib/session";
 import { hashPassword, verifyPassword } from "@/lib/auth";
 import { DEFAULT_SETTINGS, GOAL_OPTIONS_MULTI, type Audience, type DB, type Goal, type ThemePref, type TextSize, type DisplayFont } from "@/lib/schema";
+import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
+
+async function persistSupabaseSettings(body: Record<string, unknown>, settings: ReturnType<typeof withSettings>) {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) return null;
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) return null; // local/demo sessions do not have a Supabase identity
+    const completingOnboarding = body.completeOnboarding === true;
+    const profilePatch: Record<string, unknown> = {};
+    if (completingOnboarding) {
+      // Onboarding writes only the profile identity and completion fields.
+      // Questionnaire answers remain in the app store; several deployments
+      // intentionally use a minimal profiles schema.
+      if (typeof body.username === "string") profilePatch.username = body.username;
+      if (typeof body.age === "number") profilePatch.age = body.age;
+      profilePatch.onboarding_completed = true;
+    } else {
+      for (const [source, target] of [["username","username"],["name","display_name"],["bio","bio"],["school","school"],["phone","phone"],["avatarUrl","avatar_url"]]) {
+        if (source in body) profilePatch[target] = body[source];
+      }
+      if ("bannerUrl" in body) {
+        profilePatch.cover_url = body.bannerUrl;
+        profilePatch.banner_url = body.bannerUrl;
+      }
+    }
+    if (Object.keys(profilePatch).length) {
+      const query = completingOnboarding
+        ? supabase.from("profiles").upsert({ id: user.id, ...profilePatch }, { onConflict: "id" })
+        : supabase.from("profiles").update(profilePatch).eq("id", user.id);
+      const { error } = await query;
+      if (error) return error.message;
+    }
+    const row: Record<string, unknown> = {user_id:user.id,updated_at:new Date().toISOString()};
+    for (const [source,target] of [["privateProfile","is_private"],["lowSpecMode","low_spec_mode"],["aiPostSharpening","ai_post_sharpening"],["aiSmartRanking","ai_smart_ranking"],["aiDefaultModel","ai_default_model"],["accentColor","accent_color"],["theme","theme_mode"]]) {
+      if (source in body) row[target]=body[source];
+    }
+    if ("theme" in body || "theme_mode" in body) {
+      row.theme=body.theme_mode ?? body.theme;
+      row.theme_mode=body.theme_mode ?? body.theme;
+    }
+    if ("discoverable" in body) row.campus_discovery=body.discoverable;
+    if ("allowDMs" in body) row.dm_audience=body.allowDMs === "no_one" ? "none" : body.allowDMs;
+    if ("allowMentions" in body) row.tagging_audience=body.allowMentions === "no_one" ? "off" : body.allowMentions;
+    if (body.notify && typeof body.notify === "object") {
+      const notify=body.notify as Record<string,unknown>;
+      if (typeof notify.connections === "boolean") row.notify_connections=notify.connections;
+      if (typeof notify.opportunities === "boolean") row.notify_events=notify.opportunities;
+      if (typeof notify.announcements === "boolean") row.notify_polls=notify.announcements;
+      if (typeof notify.likes === "boolean" || typeof notify.comments === "boolean") row.notify_social=(notify.likes ?? notify.comments) as boolean;
+    }
+    if ("emailDigest" in body) row.email_digest=body.emailDigest;
+    if (typeof body.twoFactorEnabled === "boolean") row.two_factor_enabled=body.twoFactorEnabled;
+    // Always send a complete row: upsert inserts defaults for a first save, or updates the existing row.
+    Object.assign(row, {
+      is_private: row.is_private ?? settings.privateProfile,
+      campus_discovery: row.campus_discovery ?? settings.discoverable,
+      dm_audience: row.dm_audience ?? (settings.allowDMs === "no_one" ? "none" : settings.allowDMs),
+      tagging_audience: row.tagging_audience ?? (settings.allowMentions === "no_one" ? "off" : settings.allowMentions),
+      notify_connections: row.notify_connections ?? settings.notify.connections,
+      notify_events: row.notify_events ?? settings.notify.opportunities,
+      notify_polls: row.notify_polls ?? settings.notify.announcements,
+      notify_social: row.notify_social ?? (settings.notify.likes && settings.notify.comments),
+      email_digest: row.email_digest ?? settings.emailDigest,
+      theme_mode: row.theme_mode ?? settings.theme,
+      theme: row.theme ?? settings.theme,
+      accent_color: row.accent_color ?? settings.accentColor,
+      low_spec_mode: row.low_spec_mode ?? settings.lowSpecMode,
+      ai_post_sharpening: row.ai_post_sharpening ?? settings.aiPostSharpening,
+      ai_smart_ranking: row.ai_smart_ranking ?? settings.aiSmartRanking,
+      ai_default_model: row.ai_default_model ?? settings.aiDefaultModel,
+      two_factor_enabled: row.two_factor_enabled ?? settings.twoFactor.enabled,
+    });
+    try {
+      const { error } = await supabase.from("user_settings").upsert(row,{onConflict:"user_id"});
+      if (error) return error.message;
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Could not save user settings.";
+    }
+  } catch (error) {
+    return error instanceof Error ? error.message : "Supabase settings update failed.";
+  }
+}
+
+async function persistSupabaseRelation(action:string, handle:string) {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) return null;
+  try {
+    const supabase=await createSupabaseServerClient();
+    const {data:{user}}=await supabase.auth.getUser();
+    if(!user)return null;
+    const {data:target,error:lookupError}=await supabase.from("profiles").select("id").ilike("username",handle).maybeSingle();
+    if(lookupError)return lookupError.message;
+    if(!target)return "No Supabase profile exists for that username.";
+    const isBlock=action==="block"||action==="unblock";
+    const table=isBlock?"user_blocks":"user_mutes";
+    const owner=isBlock?"blocker_id":"muter_id";
+    const subject=isBlock?"blocked_id":"muted_id";
+    const adding=action==="block"||action==="mute";
+    const result=adding
+      ? await supabase.from(table).upsert({[owner]:user.id,[subject]:target.id},{onConflict:`${owner},${subject}`})
+      : await supabase.from(table).delete().eq(owner,user.id).eq(subject,target.id);
+    if(result.error)return result.error.message;
+    if(action==="block"){
+      const {error}=await supabase.from("connections").delete().eq("requester_id",target.id).eq("target_id",user.id);
+      if(error)return error.message;
+      const {error:otherDirectionError}=await supabase.from("connections").delete().eq("requester_id",user.id).eq("target_id",target.id);
+      if(otherDirectionError)return otherDirectionError.message;
+    }
+    return null;
+  } catch(error) { return error instanceof Error?error.message:"Could not update safety list."; }
+}
+
+async function persistSupabaseAccountAction(action:"deactivate"|"delete") {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) return null;
+  try {
+    const supabase=await createSupabaseServerClient();
+    const {data:{user}}=await supabase.auth.getUser();
+    if(!user)return null;
+    if(action==="deactivate"){
+      const {error}=await supabase.from("profiles").update({is_deactivated:true}).eq("id",user.id);
+      if(error)return error.message;
+      const {error:signOutError}=await supabase.auth.signOut({scope:"local"});
+      return signOutError?.message??null;
+    }
+    const {error}=await supabase.rpc("delete_my_account");
+    return error?.message??null;
+  }catch(error){return error instanceof Error?error.message:"Account action failed.";}
+}
+
+async function getSupabaseSettingsPayload() {
+  if(!process.env.NEXT_PUBLIC_SUPABASE_URL||!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)return null;
+  const supabase=await createSupabaseServerClient();
+  const {data:{user}}=await supabase.auth.getUser();
+  if(!user)return null;
+  const [{data:profile},{data:row}]=await Promise.all([
+    supabase.from("profiles").select("id,username,full_name,display_name,bio,school,phone,avatar_url,cover_url,banner_url,created_at,is_deactivated").eq("id",user.id).maybeSingle(),
+    supabase.from("user_settings").select("*").eq("user_id",user.id).maybeSingle(),
+  ]);
+  if(!profile||profile.is_deactivated)return null;
+  const settings={...DEFAULT_SETTINGS};
+  if(row)Object.assign(settings,{privateProfile:row.is_private,discoverable:row.campus_discovery,allowDMs:row.dm_audience==="none"?"no_one":row.dm_audience,allowMentions:row.tagging_audience==="off"?"no_one":row.tagging_audience,theme:row.theme_mode??row.theme,accentColor:row.accent_color,lowSpecMode:row.low_spec_mode,reducedMotion:row.low_spec_mode,aiPostSharpening:row.ai_post_sharpening,aiSmartRanking:row.ai_smart_ranking,aiDefaultModel:row.ai_default_model,emailDigest:row.email_digest,notify:{...DEFAULT_SETTINGS.notify,connections:row.notify_connections,opportunities:row.notify_events,announcements:row.notify_polls,likes:row.notify_social,comments:row.notify_social,emailDigest:row.email_digest!=="off"}});
+  if(row)settings.twoFactor.enabled=row.two_factor_enabled;
+  const [{data:br},{data:mr}]=await Promise.all([
+    supabase.from("user_blocks").select("blocked_id").eq("blocker_id",user.id),
+    supabase.from("user_mutes").select("muted_id").eq("muter_id",user.id),
+  ]);
+  const ids=[...(br??[]).map(x=>x.blocked_id),...(mr??[]).map(x=>x.muted_id)];
+  const related=ids.length?await supabase.from("profiles").select("id,username,display_name").in("id",ids):{data:[]};
+  const people=related.data??[];
+  const map=(id:string)=>{const person=people.find(p=>p.id===id);return person?{id,handle:person.username,name:person.display_name??person.username}:null;};
+  return {profile:{id:user.id,handle:profile.username,name:profile.display_name??profile.full_name??profile.username,headline:"",school:profile.school??"",photo:profile.avatar_url,banner:profile.banner_url??profile.cover_url,bio:profile.bio??"",email:user.email??null,phone:profile.phone??null,createdAt:profile.created_at},settings,blocked:(br??[]).map(x=>map(x.blocked_id)).filter(Boolean),muted:(mr??[]).map(x=>map(x.muted_id)).filter(Boolean),sessions:[],loginEvents:[],activeSessionToken:null,plan:{tier:"free",price:0,renewsAt:null,imageLimit:1,textLimit:500},version:"1.0.0"};
+}
+
+function validateSupabaseSettingsBody(body:Record<string,unknown>):string|null {
+  if(typeof body.name==="string"&&(body.name.trim().length<2||body.name.trim().length>40))return "Name must be 2–40 characters.";
+  if(typeof body.username==="string"&&!/^[a-z0-9_.]{3,24}$/i.test(body.username.trim().replace(/^@/,"")))return "Username must be 3–24 letters, numbers, dots, or underscores.";
+  if(body.age!==undefined){const age=Math.floor(Number(body.age));if(!Number.isInteger(age)||age<12||age>105)return "Enter an age between 12 and 105.";}
+  if(typeof body.theme==="string"&&!(["dark","light","system"] as string[]).includes(body.theme))return "Unknown theme.";
+  if(typeof body.theme_mode==="string"&&!( ["dark","light","system"] as string[]).includes(body.theme_mode))return "Unknown theme mode.";
+  if(typeof body.accentColor==="string"&&!/^#[0-9a-f]{6}$/i.test(body.accentColor))return "Invalid accent color.";
+  if(typeof body.aiDefaultModel==="string"&&!(["openai/gpt-oss-20b","openai/gpt-oss-120b"] as string[]).includes(body.aiDefaultModel))return "Unknown AI model.";
+  if(typeof body.emailDigest==="string"&&!(["off","daily","weekly"] as string[]).includes(body.emailDigest))return "Unknown email digest setting.";
+  if(typeof body.allowDMs==="string"&&!(["everyone","connections","no_one"] as string[]).includes(body.allowDMs))return "Invalid DM policy.";
+  if(typeof body.allowMentions==="string"&&!(["everyone","connections","no_one"] as string[]).includes(body.allowMentions))return "Invalid mention policy.";
+  return null;
+}
 
 /* ---------- helpers ---------- */
 
@@ -22,6 +189,8 @@ function publicProfileOf(u: DB["users"][number]) {
     photo: u.photo ?? null,
     email: u.email ?? null,
     phone: u.phone ?? null,
+    bio: u.bio ?? "",
+    banner: u.banner ?? null,
     createdAt: u.createdAt,
   };
 }
@@ -30,7 +199,10 @@ function publicProfileOf(u: DB["users"][number]) {
 
 export async function GET() {
   const auth = await requireUser();
-  if ("res" in auth) return auth.res;
+  if ("res" in auth) {
+    try { const payload=await getSupabaseSettingsPayload(); return payload?json(payload):auth.res; }
+    catch { return auth.res; }
+  }
   const { me, db } = auth;
   const s = withSettings(me);
 
@@ -50,11 +222,39 @@ export async function GET() {
     return u ? { handle: u.handle, name: u.name, id: u.id } : null;
   };
 
+  let profile=publicProfileOf(me);
+  let settings=s;
+  let blocked=s.blocked.map(pub).filter(Boolean);
+  let muted=s.muted.map(pub).filter(Boolean);
+  if(process.env.NEXT_PUBLIC_SUPABASE_URL&&process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY){
+    try {
+      const supabase=await createSupabaseServerClient();
+      const {data:{user}}=await supabase.auth.getUser();
+      if(user){
+        const [{data:sp},{data:ss}]=await Promise.all([
+          supabase.from("profiles").select("username,display_name,bio,school,phone,avatar_url,cover_url,banner_url").eq("id",user.id).maybeSingle(),
+          supabase.from("user_settings").select("*").eq("user_id",user.id).maybeSingle(),
+        ]);
+        if(sp)profile={...profile,handle:sp.username,name:sp.display_name??profile.name,bio:sp.bio??"",school:sp.school??profile.school,phone:sp.phone??profile.phone,photo:sp.avatar_url??profile.photo,banner:sp.banner_url??sp.cover_url??null};
+        if(ss)settings={...s,privateProfile:ss.is_private,discoverable:ss.campus_discovery,allowDMs:ss.dm_audience==="none"?"no_one":ss.dm_audience,allowMentions:ss.tagging_audience==="off"?"no_one":ss.tagging_audience,theme:ss.theme_mode??ss.theme,accentColor:ss.accent_color,lowSpecMode:ss.low_spec_mode,reducedMotion:ss.low_spec_mode,aiPostSharpening:ss.ai_post_sharpening,aiSmartRanking:ss.ai_smart_ranking,aiDefaultModel:ss.ai_default_model,emailDigest:ss.email_digest,notify:{...s.notify,connections:ss.notify_connections,opportunities:ss.notify_events,announcements:ss.notify_polls,likes:ss.notify_social,comments:ss.notify_social}};
+        if(ss)settings.twoFactor.enabled=ss.two_factor_enabled;
+        const [{data:br},{data:mr}]=await Promise.all([
+          supabase.from("user_blocks").select("blocked_id").eq("blocker_id",user.id),
+          supabase.from("user_mutes").select("muted_id").eq("muter_id",user.id),
+        ]);
+        const blockedIds=(br??[]).map(row=>row.blocked_id);
+        const mutedIds=(mr??[]).map(row=>row.muted_id);
+        if(blockedIds.length){const {data:rows}=await supabase.from("profiles").select("id,username,display_name").in("id",blockedIds);if(rows)blocked=rows.map(row=>({id:row.id,handle:row.username,name:row.display_name??row.username}));}
+        if(mutedIds.length){const {data:rows}=await supabase.from("profiles").select("id,username,display_name").in("id",mutedIds);if(rows)muted=rows.map(row=>({id:row.id,handle:row.username,name:row.display_name??row.username}));}
+      }
+    } catch { /* no Supabase session or migration; local app settings remain available */ }
+  }
+
   return json({
-    profile: publicProfileOf(me),
-    settings: s,
-    blocked: s.blocked.map(pub).filter(Boolean),
-    muted: s.muted.map(pub).filter(Boolean),
+    profile,
+    settings,
+    blocked,
+    muted,
     sessions,
     loginEvents,
     activeSessionToken: await getSessionToken(),
@@ -67,9 +267,18 @@ export async function GET() {
 
 export async function PATCH(req: NextRequest) {
   const auth = await requireUser();
-  if ("res" in auth) return auth.res;
-  const { me, db } = auth;
   const body = await readBody<Record<string, unknown>>(req);
+  if ("res" in auth) {
+    const validation=validateSupabaseSettingsBody(body);
+    if(validation)return bad(validation);
+    const payload=await getSupabaseSettingsPayload();
+    if(!payload)return auth.res;
+    const settings=payload.settings;
+    const settingError=await persistSupabaseSettings(body,settings);
+    if(settingError)return bad(`Supabase settings update failed: ${settingError}`,502);
+    return json({ok:true,settings,profile:payload.profile});
+  }
+  const { me, db } = auth;
   const { s } = mySettings(db, me.id);
 
   // --- Account & profile ---
@@ -78,13 +287,27 @@ export async function PATCH(req: NextRequest) {
     if (name.length < 2 || name.length > 40) return bad("Name must be 2–40 characters.");
     me.name = name;
   }
+  if (typeof body.username === "string") {
+    const username = body.username.trim().replace(/^@/, "").toLowerCase();
+    if (!/^[a-z0-9_.]{3,24}$/.test(username)) return bad("Username must be 3–24 letters, numbers, dots, or underscores.");
+    if (db.users.some((u) => u.id !== me.id && u.handle.toLowerCase() === username)) return bad("That username is already taken.", 409);
+    me.handle = username;
+  }
+  if (typeof body.bio === "string") me.bio = body.bio.trim().slice(0, 300);
+  if (typeof body.school === "string") me.school = body.school.trim().slice(0, 120);
   if (typeof body.headline === "string") me.headline = body.headline.trim().slice(0, 80);
   if (typeof body.email === "string") {
     const email = body.email.trim();
     if (email && !/^\S+@\S+\.\S+$/.test(email)) return bad("That email doesn't look valid.");
     me.email = email || undefined;
   }
-  if (typeof body.phone === "string") me.phone = body.phone.trim() || undefined;
+  if (typeof body.phone === "string") {
+    const phone=body.phone.trim();
+    if(phone.length>32)return bad("Phone number must be 32 characters or fewer.");
+    me.phone=phone||undefined;
+  }
+  if (typeof body.avatarUrl === "string") me.photo = body.avatarUrl || undefined;
+  if (typeof body.bannerUrl === "string") me.banner = body.bannerUrl || undefined;
   if (typeof body.photo === "string") {
     if (body.photo.length > 300_000) return bad("Photo is too large — pick something under ~200KB.", 413);
     me.photo = body.photo || undefined;
@@ -199,6 +422,10 @@ export async function PATCH(req: NextRequest) {
     if (!["dark", "light", "system"].includes(body.theme)) return bad("Unknown theme.");
     s.theme = body.theme as ThemePref;
   }
+  if (typeof body.theme_mode === "string") {
+    if (!["dark", "light", "system"].includes(body.theme_mode)) return bad("Unknown theme mode.");
+    s.theme = body.theme_mode as ThemePref;
+  }
   if (typeof body.textSize === "string") {
     if (!["default", "large", "xlarge"].includes(body.textSize)) return bad("Unknown text size.");
     s.textSize = body.textSize as TextSize;
@@ -208,10 +435,28 @@ export async function PATCH(req: NextRequest) {
     s.displayFont = body.displayFont as DisplayFont;
   }
   if (typeof body.reducedMotion === "boolean") s.reducedMotion = body.reducedMotion;
+  if (typeof body.lowSpecMode === "boolean") { s.lowSpecMode = body.lowSpecMode; s.reducedMotion = body.lowSpecMode; }
+  if (typeof body.accentColor === "string") {
+    if (!/^#[0-9a-f]{6}$/i.test(body.accentColor)) return bad("Invalid accent color.");
+    s.accentColor = body.accentColor;
+  }
+  if (typeof body.aiPostSharpening === "boolean") s.aiPostSharpening = body.aiPostSharpening;
+  if (typeof body.aiSmartRanking === "boolean") s.aiSmartRanking = body.aiSmartRanking;
+  if (typeof body.aiDefaultModel === "string") {
+    if (!["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(body.aiDefaultModel)) return bad("Unknown AI model.");
+    s.aiDefaultModel = body.aiDefaultModel;
+  }
+  if (typeof body.emailDigest === "string") {
+    if (!["off", "daily", "weekly"].includes(body.emailDigest)) return bad("Unknown email digest setting.");
+    s.emailDigest = body.emailDigest as typeof s.emailDigest;
+    s.notify.emailDigest = s.emailDigest !== "off";
+  }
   if (typeof body.highContrast === "boolean") s.highContrast = body.highContrast;
   if (typeof body.language === "string") s.language = body.language;
   if (typeof body.timezone === "string") s.timezone = body.timezone;
 
+  const supabaseError=await persistSupabaseSettings(body,s);
+  if(supabaseError)return bad(`Supabase settings update failed: ${supabaseError}`,502);
   me.settings = s;
   await persist(db);
   return json({ ok: true, settings: s, profile: publicProfileOf(me) });
@@ -221,16 +466,31 @@ export async function PATCH(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const auth = await requireUser();
-  if ("res" in auth) return auth.res;
-  const { me, db } = auth;
   const body = await readBody<{
     action?: string;
     handle?: string;
     token?: string;
     hours?: number;
     text?: string;
+    confirmed?: boolean;
     reason?: string;
   }>(req);
+
+  if("res" in auth){
+    if(body.action==="block"||body.action==="unblock"||body.action==="mute"||body.action==="unmute"){
+      if(!body.handle?.trim())return bad("Enter a username.");
+      const error=await persistSupabaseRelation(body.action,body.handle.trim().replace(/^@/,""));
+      return error?bad(`Could not update safety list: ${error}`,502):json({ok:true});
+    }
+    if(body.action==="deactivate"||body.action==="delete"){
+      const expected=body.action==="delete"?"DELETE":"DEACTIVATE";
+      if(!body.confirmed||body.text?.trim().toUpperCase()!==expected)return bad(`Type ${expected} to confirm.`);
+      const error=await persistSupabaseAccountAction(body.action);
+      return error?bad(`Account action failed: ${error}`,502):json({ok:true});
+    }
+    return auth.res;
+  }
+  const { me, db } = auth;
 
   switch (body.action) {
     case "block": {
@@ -251,6 +511,8 @@ export async function POST(req: NextRequest) {
         me.settings = s;
         await persist(db);
       }
+      const supabaseError=await persistSupabaseRelation("block",t.handle);
+      if(supabaseError)return bad(`Could not save block: ${supabaseError}`,502);
       return json({ ok: true, blocked: s.blocked });
     }
     case "unblock": {
@@ -259,6 +521,8 @@ export async function POST(req: NextRequest) {
       s.blocked = s.blocked.filter((id) => id !== db.users.find((u) => u.handle === body.handle)?.id);
       me.settings = s;
       await persist(db);
+      const supabaseError=await persistSupabaseRelation("unblock",body.handle??"");
+      if(supabaseError)return bad(`Could not save unblock: ${supabaseError}`,502);
       return json({ ok: true, blocked: s.blocked });
     }
     case "mute": {
@@ -268,6 +532,8 @@ export async function POST(req: NextRequest) {
       if (!s.muted.includes(t.id)) s.muted.push(t.id);
       me.settings = s;
       await persist(db);
+      const supabaseError=await persistSupabaseRelation("mute",t.handle);
+      if(supabaseError)return bad(`Could not save mute: ${supabaseError}`,502);
       return json({ ok: true, muted: s.muted });
     }
     case "unmute": {
@@ -276,6 +542,8 @@ export async function POST(req: NextRequest) {
       s.muted = s.muted.filter((x) => x !== id);
       me.settings = s;
       await persist(db);
+      const supabaseError=await persistSupabaseRelation("unmute",body.handle??"");
+      if(supabaseError)return bad(`Could not save unmute: ${supabaseError}`,502);
       return json({ ok: true, muted: s.muted });
     }
     case "revoke-session": {
@@ -330,13 +598,18 @@ export async function POST(req: NextRequest) {
       });
     }
     case "deactivate": {
+      if (!body.confirmed || body.text !== "DEACTIVATE") return bad('Type DEACTIVATE to confirm.');
+      const supabaseError=await persistSupabaseAccountAction("deactivate");
+      if(supabaseError)return bad(`Could not deactivate account: ${supabaseError}`,502);
       me.deactivatedAt = new Date().toISOString();
       await persist(db);
       await clearSession();
       return json({ ok: true });
     }
     case "delete": {
-      if (body.text?.trim().toUpperCase() !== "DELETE") return bad('Type DELETE to confirm.');
+      if (!body.confirmed || body.text?.trim().toUpperCase() !== "DELETE") return bad('Type DELETE to confirm.');
+      const supabaseError=await persistSupabaseAccountAction("delete");
+      if(supabaseError)return bad(`Could not delete account: ${supabaseError}`,502);
       const id = me.id;
       db.users = db.users.filter((u) => u.id !== id);
       db.connections = db.connections.filter((c) => c.requesterId !== id && c.targetId !== id);

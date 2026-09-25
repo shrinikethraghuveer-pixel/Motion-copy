@@ -33,6 +33,7 @@ async function ensureSeeded(): Promise<void> {
         users: seedUsers(),
         connections: seedConnections(),
         chats: seedChats(),
+        dmGroups: [],
         posts: seedPosts(),
         groups: seedGroups(),
         notifications: seedNotifications(),
@@ -80,6 +81,16 @@ const AGE_BY_GRADE: Record<string, number> = { middle: 13, high: 16, college: 19
 function normalize(db: DB): DB {
   db.sessions ??= [];
   db.loginEvents ??= [];
+  db.groups ??= [];
+  db.dmGroups ??= [];
+  for (const group of db.groups) {
+    group.visibility ??= "public";
+    group.avatarUrl ??= null;
+    group.tags ??= group.tag ? [group.tag] : [];
+    group.joinRequests ??= [];
+    group.posts ??= [];
+    for (const post of group.posts) post.replies ??= [];
+  }
   // Backfill real ages so <18/18+ derives from age, not grade (high-schoolers can be 18+).
   for (const u of db.users) {
     if (typeof u.age !== "number" || u.age <= 0) {

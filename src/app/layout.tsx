@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
 import { ToastProvider } from "@/components/motion/toaster";
-import FloatingChatWidget from "@/components/chat/FloatingChatWidget";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -29,7 +28,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="mesh-gradient" aria-hidden="true" />
         <ToastProvider>
           {children}
-          <FloatingChatWidget />
         </ToastProvider>
       </body>
     </html>

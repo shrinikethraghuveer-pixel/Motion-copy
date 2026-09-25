@@ -31,10 +31,10 @@ const TABS: Array<{ key: Tab; label: string; selfOnly?: boolean }> = [
 
 export default function UserProfilePage() {
   const params = useParams<{ username: string }>();
-  const username = useMemo(() => (Array.isArray(params.username) ? params.username[0] : params.username) ?? "", [params]);
+  const username = useMemo(() => ((Array.isArray(params.username) ? params.username[0] : params.username) ?? "").replace(/^@+/, ""), [params]);
   const router = useRouter();
   const { toast } = useUI();
-  const { refresh: refreshSession } = useSession();
+  const { me, refresh: refreshSession } = useSession();
 
   const [data, setData] = useState<ProfilePageData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,6 +64,21 @@ export default function UserProfilePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Recover the signed-in user's missing profile through onboarding. Unknown
+  // handles belonging to other users still show the normal not-found state.
+  useEffect(() => {
+    if (!loading && (notFound || (data && !data.profile.username)) && me && username.toLowerCase() === me.handle.toLowerCase()) {
+      router.replace("/onboarding");
+    }
+  }, [data, loading, me, notFound, router, username]);
+
+  const needsOnboarding = Boolean(
+    !loading &&
+      (notFound || (data && !data.profile.username)) &&
+      me &&
+      username.toLowerCase() === me.handle.toLowerCase()
+  );
 
   useEffect(() => {
     const h = () => void load();
@@ -139,6 +154,8 @@ export default function UserProfilePage() {
       </div>
     );
   }
+
+  if (needsOnboarding) return null;
 
   if (notFound || !data) {
     return (

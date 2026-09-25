@@ -48,10 +48,10 @@ function PostCardInner({
   return (
     <article className="light:bg-white/80 light:border-white/90 light:shadow-lg light:shadow-slate-300/50 dark:bg-zinc-900/60 dark:border-zinc-800/80 dark:shadow-none rounded-2xl border p-5 backdrop-blur-xl transition-colors hover:light:border-violet-200 dark:hover:border-zinc-700">
       <div className="flex items-start gap-3">
-        <div className="light:border-slate-300/70 dark:border-zinc-700/70 mt-0.5 grid size-10 shrink-0 place-items-center overflow-hidden rounded-full border text-sm font-bold light:text-zinc-900 dark:text-white">
+        <div className="light:border-slate-300/70 dark:border-zinc-700/70 mt-0.5 grid aspect-square size-10 shrink-0 place-items-center overflow-hidden rounded-full border text-sm font-bold light:text-zinc-900 dark:text-white">
           {author?.avatar_url ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={author.avatar_url} alt={displayName} className="h-full w-full object-cover" />
+            <img src={author.avatar_url} alt={displayName} className="aspect-square h-full w-full rounded-full object-cover" />
           ) : (
             <span
               style={{

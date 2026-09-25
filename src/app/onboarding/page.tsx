@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check, Loader2, Plus } from "lucide-react";
 import { api } from "@/lib/client";
+import { isUsernameAvailable } from "@/lib/supabase/auth";
 import type { PublicUser } from "@/lib/schema";
 import { GRADE_OPTIONS, GOAL_OPTIONS_MULTI, DISCOVERY_SOURCES } from "@/lib/schema";
 import { readWelcomeTags, clearWelcomeTags } from "@/lib/welcome-tags";
@@ -66,6 +67,8 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [username, setUsername] = useState("");
+  const [usernameStatus, setUsernameStatus] = useState<"idle" | "checking" | "available" | "taken" | "error">("idle");
 
   // Step 1 — stage + age
   const [grade, setGrade] = useState<string | null>(null);
@@ -93,11 +96,28 @@ export default function OnboardingPage() {
           return;
         }
         setMe(d.user);
+        setUsername(d.user.handle ?? "");
         setInterests(readWelcomeTags()); // interests picked on /welcome carry in
         setChecking(false);
       })
       .catch(() => router.replace("/welcome"));
   }, [router]);
+
+  useEffect(() => {
+    const normalized = username.trim().replace(/^@+/, "").toLowerCase();
+    if (!/^[a-z0-9_.]{3,20}$/.test(normalized)) {
+      setUsernameStatus("idle");
+      return;
+    }
+    setUsernameStatus("checking");
+    let active = true;
+    const timer = window.setTimeout(() => {
+      isUsernameAvailable(normalized)
+        .then((available) => { if (active) setUsernameStatus(available ? "available" : "taken"); })
+        .catch(() => { if (active) setUsernameStatus("error"); });
+    }, 300);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [username]);
 
   const addCustomTag = () => {
     const tag = draft.trim().replace(/^#/, "").replace(/\s+/g, " ").slice(0, 24);
@@ -127,6 +147,7 @@ export default function OnboardingPage() {
         body: JSON.stringify({
           // Even on skip, persist whatever the user already answered.
           grade: grade ?? "high",
+          username: username.trim().replace(/^@+/, "").toLowerCase(),
           age: ageValid ? ageNum : me?.age ?? 16,
           skills: interests,
           goals: goals.length ? goals : skip ? ["Find collaborators"] : undefined,
@@ -144,7 +165,7 @@ export default function OnboardingPage() {
   }
 
   const canNext =
-    (step === 0 && !!grade && ageValid) ||
+    (step === 0 && !!grade && ageValid && usernameStatus === "available") ||
     (step === 1 && interests.length > 0) ||
     step === 2 ||
     step === 3;
@@ -235,8 +256,28 @@ export default function OnboardingPage() {
                     What stage are you at?
                   </h1>
                   <p className="mt-1 text-sm light:text-zinc-600 dark:text-zinc-400">
-                    Pick where you are — age is just a number here.
+                    Choose your handle and tell us a little about yourself.
                   </p>
+
+                  <div className="mt-5">
+                    <label htmlFor="username" className="text-xs font-semibold light:text-zinc-500 dark:text-zinc-500">
+                      Username
+                    </label>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <span className="text-sm text-zinc-500">@</span>
+                      <input
+                        id="username"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value.replace(/^@+/, "").toLowerCase())}
+                        autoComplete="username"
+                        maxLength={20}
+                        className={`${INPUT} flex-1`}
+                      />
+                    </div>
+                    <p className={`mt-1.5 text-xs ${usernameStatus === "available" ? "text-emerald-500" : usernameStatus === "taken" || usernameStatus === "error" ? "text-rose-500" : "light:text-zinc-500 dark:text-zinc-500"}`}>
+                      {usernameStatus === "checking" ? "Checking availability…" : usernameStatus === "available" ? "Username is available." : usernameStatus === "taken" ? "That username is already taken." : usernameStatus === "error" ? "Could not check availability. Try again." : "Use 3–20 letters, numbers, dots, or underscores."}
+                    </p>
+                  </div>
 
                   <div className="mt-5 space-y-2">
                     {GRADE_OPTIONS.map((g) => (
@@ -421,8 +462,8 @@ export default function OnboardingPage() {
               <button
                 onClick={() => {
                   setError(null);
-                  if (step === 0 && (!grade || !ageValid)) {
-                    setError("Pick your stage and age to continue.");
+                  if (step === 0 && (!grade || !ageValid || usernameStatus !== "available")) {
+                    setError("Choose a stage, enter a valid age, and use an available username.");
                     return;
                   }
                   if (step === 1 && interests.length === 0) {

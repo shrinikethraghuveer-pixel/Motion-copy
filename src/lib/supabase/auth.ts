@@ -134,11 +134,14 @@ export async function getCurrentUserSession(): Promise<SessionUser | null> {
 /** True when the username is free (case-insensitive), false when taken. */
 export async function isUsernameAvailable(username: string): Promise<boolean> {
   const supabase = createClient();
-  const { data } = await supabase
+  const { data: { user } } = await supabase.auth.getUser();
+  let query = supabase
     .from("profiles")
     .select("id")
-    .ilike("username", username)
-    .maybeSingle();
+    .ilike("username", username);
+  if (user) query = query.neq("id", user.id);
+  const { data, error } = await query.maybeSingle();
+  if (error) throw new Error(error.message);
   return !data;
 }
 

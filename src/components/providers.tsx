@@ -6,6 +6,7 @@ import { CheckCircle2, X } from "lucide-react";
 import { api } from "@/lib/client";
 import type { PublicUser } from "@/lib/schema";
 import ComposerModal from "@/components/feed/ComposerModal";
+import { signOut as signOutSupabase } from "@/lib/supabase/auth";
 
 interface SessionCtx {
   me: PublicUser | null;
@@ -106,9 +107,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, [refresh, refreshUnread, refreshChats]);
 
   const signOut = useCallback(async () => {
-    await api("/api/session", { method: "DELETE" });
-    setMe(null);
-    window.location.href = "/";
+    try { await signOutSupabase(); } catch { /* local Motion accounts may not have a Supabase session */ }
+    try { await api("/api/session", { method: "DELETE" }); } catch { /* continue with the client-side sign-out */ } finally {
+      setMe(null);
+      window.location.assign("/welcome");
+    }
   }, []);
 
   const updateSettings = useCallback(

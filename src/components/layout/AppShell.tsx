@@ -1,6 +1,7 @@
 "use client";
 
 import Navbar from "@/components/motion/navbar";
+import MessagingDrawer from "@/components/motion/messaging-drawer";
 
 /** Shared authenticated layout with paired liquid-glass and obsidian surfaces. */
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -10,6 +11,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <main className="min-h-screen animate-in fade-in slide-in-from-bottom-1 duration-200 pb-24 pt-20 lg:pb-8">
         {children}
       </main>
+      <MessagingDrawer />
     </div>
   );
 }

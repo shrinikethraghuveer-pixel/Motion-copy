@@ -1,10 +1,17 @@
 import { redirect } from "next/navigation";
+import { getSessionUserId } from "@/lib/session";
+import { createClient } from "@/lib/supabase/server";
 
 /**
- * The landing experience lives at /welcome (Obsidian-glass hero + interest
- * tagging). The root falls through to it for both signed-in and new visitors;
- * /welcome bounces authenticated users on to /home.
+ * Send signed-in users to the feed and keep the welcome experience for visitors.
  */
-export default function RootPage() {
-  redirect("/welcome");
+export default async function RootPage() {
+  // Motion's app session covers password logins; Supabase's auth cookie covers
+  // OAuth users before/without a Motion session cookie being present.
+  const sessionUserId = await getSessionUserId();
+  if (sessionUserId) redirect("/home");
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  redirect(user ? "/home" : "/welcome");
 }

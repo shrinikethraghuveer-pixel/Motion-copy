@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { bad, hydratePost, persist, readBody, requireUser, withSettings } from "@/lib/server";
 import { newId } from "@/lib/session";
 import type { Post } from "@/lib/schema";
+import { screenUserText } from "@/lib/moderation";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser();
@@ -28,7 +30,8 @@ export async function GET(req: NextRequest) {
     if (a.deactivatedAt) return true;
     const as = withSettings(a);
     if (as.blocked.includes(me.id) || mySettings.blocked.includes(authorId)) return true;
-    if (as.muted.includes(authorId) || mySettings.muted.includes(authorId)) return true;
+    if (mySettings.muted.includes(authorId)) return true;
+    if (as.privateProfile && !friendIds.has(authorId) && authorId !== me.id) return true;
     return false;
   };
 
@@ -60,26 +63,59 @@ export async function POST(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
+  const rate = await rateLimit(req, "post-create", me.id, 8, 60);
+  if (!rate.allowed) return rateLimitResponse(rate.retryAfter);
   const body = await readBody<{
-    type?: "social" | "opportunity";
+    type?: "standard" | "social" | "opportunity" | "poll" | "event";
     text?: string;
+    audience?: string;
     media?: { kind: "art"; seed: string; label: string } | null;
-    event?: { title?: string; date?: string; location?: string; kind?: "internship" | "hackathon" | "event" };
+    mediaUrls?: string[];
+    poll?: { question?: string; options?: string[]; duration?: "1" | "3" | "7" | "0"; votesPerUser?: 1 | 99; hideResults?: boolean };
+    event?: { title?: string; date?: string; time?: string; endTime?: string; duration?: string; venue?: string; capacity?: string; category?: string };
   }>(req);
 
   const text = (body.text ?? "").trim();
   const media = body.media ?? null;
-  if (!text && !media) return bad("Add something to post — text, a visual, or both.");
-  if (text.length > 500) return bad("Free tier posts cap at 500 characters.", 413);
+  const mediaUrls = Array.isArray(body.mediaUrls) ? body.mediaUrls.filter((url): url is string => typeof url === "string").slice(0, 4) : [];
+  const postKind = body.type === "poll" ? "poll" : body.type === "event" || body.type === "opportunity" ? "event" : "text";
+  if (postKind === "poll" && !(body.poll?.question ?? "").trim()) return bad("Add a question to your poll.");
+  if (!text && !media && mediaUrls.length === 0 && postKind === "text") return bad("Add something to post - text, a visual, or both.");
+  const screening = screenUserText([text, body.media?.label, body.event?.title, body.event?.venue, body.poll?.question, ...(body.poll?.options ?? [])].filter(Boolean).join(" "));
+  if (!screening.allowed) return bad(screening.reason, 422);
 
   let event: Post["event"] = null;
-  if (body.type === "opportunity") {
-    if (!body.event?.title || !body.event?.date) return bad("Opportunity posts need an event title and date.");
+  if (postKind === "event") {
+    if (!body.event?.title || !body.event?.date || !body.event?.time || !body.event?.venue) return bad("Events need a title, date, start time, and venue.");
+    const eventDate = new Date(`${body.event.date}T${body.event.time}`);
+    if (Number.isNaN(eventDate.getTime())) return bad("Enter a valid event date and time.");
+    const capacity = body.event.capacity ? Number(body.event.capacity) : null;
+    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 2)) return bad("Event capacity must be at least 2.");
     event = {
       title: body.event.title.trim(),
-      date: body.event.date,
-      location: body.event.location?.trim() || "TBA",
-      kind: body.event.kind ?? "event",
+      date: eventDate.toISOString(),
+      location: body.event.venue.trim(),
+      kind: body.event.category?.toLowerCase() === "hackathon" ? "hackathon" : "event",
+      endTime: body.event.endTime,
+      durationMinutes: Number(body.event.duration) || undefined,
+      capacity,
+      category: body.event.category,
+      attendeeIds: [],
+      posterUrl: mediaUrls[0] ?? null,
+    };
+  }
+
+  let poll: Post["poll"] = null;
+  if (postKind === "poll") {
+    const options = (body.poll?.options ?? []).map((value) => value.trim()).filter(Boolean);
+    if (options.length < 2 || options.length > 6) return bad("Polls need between 2 and 6 options.");
+    poll = {
+      question: body.poll!.question!.trim(),
+      options: options.map((option, index) => ({ id: `option_${index + 1}`, text: option, votes: [] })),
+      duration: body.poll?.duration ?? "1",
+      multipleChoice: body.poll?.votesPerUser === 99,
+      hideResults: body.poll?.hideResults ?? false,
+      totalVotes: 0,
     };
   }
 
@@ -88,9 +124,11 @@ export async function POST(req: NextRequest) {
   const post: Post = {
     id: newId("p"),
     authorId: me.id,
-    type: body.type === "opportunity" ? "opportunity" : "social",
+    type: postKind === "poll" ? "poll" : postKind === "event" ? "opportunity" : "social",
     text,
     media,
+    mediaUrls,
+    poll,
     likes: [],
     reposts: [],
     comments: [],

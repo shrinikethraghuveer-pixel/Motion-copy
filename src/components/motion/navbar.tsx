@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import SearchBar from "@/components/motion/search";
 import ThemeToggle from "@/components/motion/theme-toggle";
-import { useSession } from "@/components/providers";
+import ProfileDropdown from "@/components/motion/ProfileDropdown";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -71,15 +71,12 @@ function activeNavKey(pathname: string): string {
 
 export function Navbar({
   onAssistant,
-  onProfile,
 }: {
   onAssistant?: () => void;
   onProfile?: () => void;
 }) {
   const pathname = usePathname();
   const active = activeNavKey(pathname);
-  const { me } = useSession();
-  const ownProfileHref = me?.handle ? `/profile/${encodeURIComponent(me.handle)}` : "/profile";
 
   return (
     <>
@@ -90,8 +87,12 @@ export function Navbar({
           GLASS
         )}
       >
-        <Link href="/" aria-label="Motion home" className="shrink-0">
-          <Image src="/logo.png" alt="Motion" width={30} height={30} className="object-contain" priority />
+        <Link
+          href="/home"
+          aria-label="Motion home"
+          className="inline-flex shrink-0 cursor-pointer rounded-lg transition-all duration-200 hover:scale-105 hover:drop-shadow-[0_0_14px_rgba(139,92,246,0.55)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        >
+          <Image src="/logo.png" alt="Motion" width={39} height={39} className="object-contain" priority />
         </Link>
         <div className="min-w-0 flex-1">
           <SearchBar />
@@ -99,27 +100,20 @@ export function Navbar({
         <span className="shrink-0">
           <ThemeToggle />
         </span>
-        {/* Own avatar → own profile page. */}
-        <Link
-          href={ownProfileHref}
-          aria-label="Open your profile"
-          title={me ? `@${me.handle}` : "Your profile"}
-          className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-full border border-zinc-200/80 bg-gradient-to-br from-cyan-500 to-violet-600 text-[11px] font-bold text-white transition-all duration-200 hover:border-violet-500/50 dark:border-white/10"
-        >
-          {me?.photo ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={me.photo} alt={me.name} className="h-full w-full object-cover" />
-          ) : (
-            <span aria-hidden="true">{me?.name?.slice(0, 1).toUpperCase() ?? "M"}</span>
-          )}
-        </Link>
+        <ProfileDropdown compact />
       </header>
 
       {/* ================= desktop: floating glass top bar ================= */}
       <header className={cn("fixed left-1/2 top-3 z-40 hidden w-[min(96rem,94%)] -translate-x-1/2 rounded-2xl lg:block", GLASS)}>
         <div className="flex h-14 items-center gap-4 px-5">
           {/* brand */}
-          <Image src="/logo.png" alt="Motion" width={34} height={34} className="object-contain" priority />
+          <Link
+            href="/home"
+            aria-label="Motion home"
+            className="inline-flex shrink-0 cursor-pointer rounded-lg transition-all duration-200 hover:scale-105 hover:drop-shadow-[0_0_14px_rgba(139,92,246,0.55)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          >
+            <Image src="/logo.png" alt="Motion" width={44} height={44} className="object-contain" priority />
+          </Link>
 
           {/* search — autocomplete lives in its own component */}
           <div className="w-40 min-w-0 xl:w-56">
@@ -170,21 +164,7 @@ export function Navbar({
             <GlowButton onClick={onAssistant} label="AI Assistant">
               <Sparkles size={16} />
             </GlowButton>
-            {/* Own avatar → own profile page. */}
-            <Link
-              href={ownProfileHref}
-              onClick={onProfile ? (e) => e.stopPropagation() : undefined}
-              aria-label="Open your profile"
-              title={me ? `@${me.handle}` : "Your profile"}
-              className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-zinc-200/80 bg-gradient-to-br from-cyan-500 to-violet-600 text-xs font-bold text-white transition-all duration-200 hover:border-violet-500/50 hover:shadow-[0_0_18px_rgba(139,92,246,0.35)] dark:border-white/10"
-            >
-              {me?.photo ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={me.photo} alt={me.name} className="h-full w-full object-cover" />
-              ) : (
-                <span aria-hidden="true">{me?.name?.slice(0, 1).toUpperCase() ?? "M"}</span>
-              )}
-            </Link>
+            <ProfileDropdown />
           </div>
         </div>
       </header>

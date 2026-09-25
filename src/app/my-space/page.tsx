@@ -7,6 +7,7 @@
  */
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   BadgeCheck,
   CalendarDays,
@@ -208,6 +209,12 @@ export default function MySpacePage() {
               {sharpening ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
               Sharpen Bio with Groq AI
             </button>
+            <Link
+              href="/explore?createCommunity=1"
+              className="ml-2 mt-5 inline-flex h-10 items-center gap-2 rounded-full border border-violet-400/30 bg-violet-500/10 px-5 text-sm font-semibold text-violet-200 transition hover:border-violet-300/60 hover:bg-violet-500/20"
+            >
+              <Users size={15} /> Create Community
+            </Link>
           </div>
         </section>
 

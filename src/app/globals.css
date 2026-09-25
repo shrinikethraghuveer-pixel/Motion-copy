@@ -2,6 +2,12 @@
 @import "tw-animate-css";
 @custom-variant dark (&:where(html:not([data-theme="light"]) *));
 @custom-variant light (&:where(html[data-theme="light"] *));
+
+:root { --accent: #7c3aed; }
+html [class~="bg-violet-600"] { background-color: var(--accent); }
+html [class~="text-violet-600"] { color: var(--accent); }
+html [class~="border-violet-500"] { border-color: var(--accent); }
+.low-spec *, .low-spec *::before, .low-spec *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; backdrop-filter: none !important; }
 @config "../../tailwind.config.js";
 
 /* ================= Ambient mesh gradient — subtle pulsing violet/indigo radials

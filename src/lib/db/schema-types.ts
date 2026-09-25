@@ -21,6 +21,8 @@ export interface Profile {
   created_at: string;
   /** 0003 rich fields powering /profile/[username] + Edit Profile modal. */
   cover_url: string | null;
+  /** Current banner field; kept in sync with cover_url for older consumers. */
+  banner_url: string | null;
   headline: string | null;
   location: string | null;
   website_url: string | null;
@@ -42,6 +44,7 @@ export interface ProfileInsert {
   feed_vibe?: string | null;
   onboarding_completed?: boolean;
   cover_url?: string | null;
+  banner_url?: string | null;
   headline?: string | null;
   location?: string | null;
   website_url?: string | null;
@@ -52,12 +55,31 @@ export interface ProfileInsert {
 
 export type ProfileUpdate = Partial<Omit<ProfileInsert, "id">>;
 
+export interface UserReport {
+  id: string;
+  reporter_id: string;
+  target_type: "user" | "post";
+  target_id: string;
+  reason: string;
+  status: "pending" | "dismissed" | "actioned";
+  created_at: string;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+}
+
+export type UserReportInsert = Pick<UserReport, "reporter_id" | "target_type" | "target_id" | "reason"> & Partial<Pick<UserReport, "status" | "reviewed_at" | "reviewed_by">>;
+export type UserReportUpdate = Partial<Omit<UserReport, "id" | "reporter_id" | "target_type" | "target_id">>;
+
 /** posts — public feed rows; the AI badge fields ride alongside content. */
 export interface Post {
   id: string;
   user_id: string;
   content: string;
   media_url: string | null;
+  post_type: "text" | "event" | "poll";
+  event_details: PostEventDetails | null;
+  poll_details: PostPollDetails | null;
+  media_urls: string[];
   is_ai_generated: boolean;
   ai_prompt: string | null;
   likes_count: number;
@@ -70,11 +92,41 @@ export interface PostInsert {
   user_id: string;
   content: string;
   media_url?: string | null;
+  post_type?: "text" | "event" | "poll";
+  event_details?: PostEventDetails | null;
+  poll_details?: PostPollDetails | null;
+  media_urls?: string[];
   is_ai_generated?: boolean;
   ai_prompt?: string | null;
 }
 
 export type PostUpdate = Partial<Omit<PostInsert, "user_id">>;
+
+export interface PostEventDetails {
+  title: string;
+  venue: string;
+  date_time: string;
+  duration: string | number | null;
+  poster_url: string | null;
+  max_capacity: number | null;
+  category: string;
+  attendee_ids: string[];
+}
+
+export interface PostPollOption {
+  id: string;
+  text: string;
+  votes: string[];
+}
+
+export interface PostPollDetails {
+  question: string;
+  options: PostPollOption[];
+  duration: string;
+  multiple_choice: boolean;
+  hide_results: boolean;
+  total_votes: number;
+}
 
 /** ai_generations — private Groq history; owner-only via RLS. */
 export interface AiGeneration {
@@ -95,6 +147,57 @@ export interface AiGenerationInsert {
 
 export type AiGenerationUpdate = Partial<Omit<AiGenerationInsert, "user_id" | "prompt">>;
 
+/** group_chats — group conversations alongside 1-on-1 DMs. */
+export interface GroupChat {
+  id: string;
+  name: string;
+  description: string | null;
+  avatar_url: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface GroupChatInsert extends Partial<Pick<GroupChat, "id" | "created_at">> {
+  name: string;
+  description?: string | null;
+  avatar_url?: string | null;
+  created_by: string;
+}
+
+export type GroupChatUpdate = Partial<Omit<GroupChatInsert, "id" | "created_by">>;
+
+/** group_members — roster row; role is 'admin' | 'member'. */
+export interface GroupMember {
+  group_id: string;
+  user_id: string;
+  role: "admin" | "member";
+  joined_at: string;
+}
+
+export interface GroupMemberInsert extends Partial<Pick<GroupMember, "role" | "joined_at">> {
+  group_id: string;
+  user_id: string;
+}
+
+/** messages — one DM or group message; receiver_id is null for group rows. */
+export interface Message {
+  id: string;
+  sender_id: string;
+  receiver_id: string | null;
+  group_id: string | null;
+  content: string;
+  read: boolean;
+  created_at: string;
+}
+
+export interface MessageInsert {
+  sender_id: string;
+  receiver_id?: string | null;
+  group_id?: string | null;
+  content: string;
+  read?: boolean;
+}
+
 /** Shape accepted by supabase-js generic clients (supabase.from(table) typing). */
 export interface Database {
   public: {
@@ -103,6 +206,11 @@ export interface Database {
         Row: Profile;
         Insert: ProfileInsert;
         Update: ProfileUpdate;
+      };
+      user_reports: {
+        Row: UserReport;
+        Insert: UserReportInsert;
+        Update: UserReportUpdate;
       };
       posts: {
         Row: Post;
@@ -113,6 +221,21 @@ export interface Database {
         Row: AiGeneration;
         Insert: AiGenerationInsert;
         Update: AiGenerationUpdate;
+      };
+      messages: {
+        Row: Message;
+        Insert: MessageInsert;
+        Update: Partial<Omit<MessageInsert, "sender_id">>;
+      };
+      group_chats: {
+        Row: GroupChat;
+        Insert: GroupChatInsert;
+        Update: GroupChatUpdate;
+      };
+      group_members: {
+        Row: GroupMember;
+        Insert: GroupMemberInsert;
+        Update: Partial<Omit<GroupMemberInsert, "group_id" | "user_id">>;
       };
     };
     Views: Record<string, never>;

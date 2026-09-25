@@ -23,7 +23,16 @@ export async function GET(req: NextRequest) {
     .map((u) => toPublicUser(db, u, me.id));
 
   const mediaPosts = db.posts
-    .filter((p) => p.media && (tag === "All" || p.text.includes(tag)))
+    .filter((p) => {
+      if (!p.media || (tag !== "All" && !p.text.includes(tag))) return false;
+      const author = db.users.find((u) => u.id === p.authorId);
+      if (!author || author.deactivatedAt) return false;
+      const authorSettings = withSettings(author);
+      if (authorSettings.blocked.includes(me.id) || mySettings.blocked.includes(author.id)) return false;
+      if (mySettings.muted.includes(author.id)) return false;
+      const connected = db.connections.some((c) => c.status === "accepted" && ((c.requesterId === me.id && c.targetId === author.id) || (c.targetId === me.id && c.requesterId === author.id)));
+      return !authorSettings.privateProfile || connected || author.id === me.id;
+    })
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
     .slice(0, 18);
 

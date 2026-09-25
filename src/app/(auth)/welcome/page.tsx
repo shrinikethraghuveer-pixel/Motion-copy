@@ -1,11 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { motion, useInView } from "framer-motion";
 import { ArrowRight, Check, Compass, MessageCircle, Plus, Sparkles, Users, Zap } from "lucide-react";
 import { api } from "@/lib/client";
-import { useSession } from "@/components/providers";
 import AuthModal from "@/components/landing/AuthModal";
 import { WELCOME_TAGS_KEY } from "@/lib/welcome-tags";
 import MotionLogo from "@/components/brand/MotionLogo";
@@ -80,18 +78,12 @@ const TAG_INPUT =
 /* ───────────────────────────── page ───────────────────────────── */
 
 export default function WelcomePage() {
-  const router = useRouter();
-  const { me, loading, devFallbackSession } = useSession();
   const [authOpen, setAuthOpen] = useState(false);
   const [authTab, setAuthTab] = useState<"signin" | "signup">("signup");
   const [userCount, setUserCount] = useState<number | null>(null);
 
-  // Signed-in users have no business on the landing page — except in dev,
-  // where the API always resolves the seeded user even without a session.
-  useEffect(() => {
-    if (!loading && me && !devFallbackSession) router.replace("/home");
-  }, [me, loading, devFallbackSession, router]);
-
+  // /welcome is always reachable — signed-in users included — so the brand
+  // landing never auto-bounces anyone to /home.
   useEffect(() => {
     api<{ userCount?: number }>("/api/session")
       .then((d) => {
@@ -149,12 +141,6 @@ export default function WelcomePage() {
     setAuthOpen(true);
   };
 
-  // The stock AuthModal opens on the demo tab; flip to the requested tab on mount.
-  useEffect(() => {
-    if (!authOpen || authTab !== "signup") return;
-    // AuthModal starts on "signup" already — nothing to do, but keep tabs in sync.
-  }, [authOpen, authTab]);
-
   return (
     <div className={`${CANVAS} relative min-h-screen overflow-x-hidden`}>
       {/* Ambient violet/indigo mesh, matching the app shell */}
@@ -205,20 +191,25 @@ export default function WelcomePage() {
             <h1 className="mt-6 text-4xl font-extrabold tracking-tighter light:text-zinc-950 dark:text-zinc-100 sm:text-5xl">
               Shape Your{" "}
               {/* Brand wordmark asset inline at headline scale (theme-switching) */}
-              <span className="inline-block whitespace-nowrap align-baseline">
+              <motion.span
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.8, ease: "easeOut", delay: 0.15 }}
+                className="inline-block whitespace-nowrap align-baseline"
+              >
                 {/* eslint-disable-next-line @next/next/no-img-element -- theme-swapped brand asset */}
                 <img
                   src="/motion-wordmark-light.png"
                   alt="Motion"
-                  className="inline-block h-[0.9em] w-auto object-contain dark:hidden"
+                  className="inline-block h-[0.7em] w-auto object-contain dark:hidden"
                 />
                 {/* eslint-disable-next-line @next/next/no-img-element -- theme-swapped brand asset */}
                 <img
                   src="/motion-wordmark-dark.png"
                   alt="Motion"
-                  className="hidden h-[0.9em] w-auto object-contain dark:block"
+                  className="hidden h-[0.7em] w-auto object-contain dark:block"
                 />
-              </span>
+              </motion.span>
               : Discover,{" "}
               <span className="text-violet-600 dark:text-violet-400">Create</span>, Connect.
             </h1>
@@ -363,7 +354,7 @@ export default function WelcomePage() {
         </footer>
       </div>
 
-      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
+      {authOpen && <AuthModal initialMode={authTab} onClose={() => setAuthOpen(false)} />}
     </div>
   );
 }

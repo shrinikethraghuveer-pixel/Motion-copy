@@ -1,5 +1,4 @@
-import type { NextRequest } from "next/server";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { bad, json, persist, readBody, requireUser, toPublicUser } from "@/lib/server";
 import { newId } from "@/lib/session";
 import type { Group } from "@/lib/schema";
@@ -8,47 +7,42 @@ export async function GET(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
-  const { searchParams } = new URL(req.url);
-  const school = searchParams.get("school");
-
-  let groups = db.groups;
-  if (school) groups = groups.filter((g) => g.school === school);
-
-  return json({
-    groups: groups.map((g) => ({
-      id: g.id,
-      name: g.name,
-      tag: g.tag,
-      description: g.description,
-      school: g.school,
-      memberCount: g.members.length,
-      myRole: g.members.find((m) => m.userId === me.id)?.role ?? null,
-      members: g.members.slice(0, 8).map((m) => {
+  const school = new URL(req.url).searchParams.get("school");
+  const groups = school ? db.groups.filter((g) => g.school === school) : db.groups;
+  return json({ groups: groups.map((g) => {
+    const membership = g.members.find((m) => m.userId === me.id);
+    const request = g.joinRequests?.find((r) => r.userId === me.id);
+    return {
+      id: g.id, name: g.name, tag: g.tag, description: g.description, school: g.school,
+      memberCount: g.members.length, myRole: membership?.role ?? null,
+      visibility: g.visibility ?? "public", avatarUrl: g.avatarUrl ?? null,
+      tags: g.tags ?? [g.tag], myRequestStatus: membership ? "member" : request ? "pending" : "none",
+      members: ((g.visibility ?? "public") === "private" && !membership ? [] : g.members.slice(0, 8)).map((m) => {
         const u = db.users.find((x) => x.id === m.userId);
         return u ? { ...toPublicUser(db, u, me.id), role: m.role } : null;
       }).filter(Boolean),
-    })),
-  });
+    };
+  }) });
 }
 
 export async function POST(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
-  const body = await readBody<{ action?: "join" | "leave" | "create"; groupId?: string; name?: string; tag?: string; description?: string }>(req);
-  const action = body.action ?? "join";
+  const body = await readBody<{ action?: string; groupId?: string; name?: string; tag?: string; tags?: string[]; description?: string; visibility?: "public" | "private"; avatarUrl?: string | null }>(req);
 
-  if (action === "create") {
+  if (body.action === "create") {
     const name = (body.name ?? "").trim();
-    if (name.length < 3) return bad("Group name needs at least 3 characters.");
+    const description = (body.description ?? "").trim();
+    if (name.length < 3 || name.length > 48) return bad("Community name must be 3–48 characters.");
+    if (description.length > 300) return bad("Description must be 300 characters or fewer.");
+    const tags = [...new Set((body.tags ?? body.tag?.split(",") ?? []).map((tag) => tag.trim().replace(/^#/, "")).filter(Boolean))].slice(0, 8);
     const group: Group = {
-      id: newId("g"),
-      name,
-      tag: body.tag?.trim() || "General",
-      description: body.description?.trim() || "A fresh Motion group.",
-      school: me.school === "Independent" ? null : me.school,
-      createdAt: new Date().toISOString(),
+      id: newId("g"), name, tag: tags[0] ?? "General", tags, description: description || "A new place to build together.",
+      school: me.school === "Independent" ? null : me.school, createdAt: new Date().toISOString(),
       members: [{ userId: me.id, role: "admin", joinedAt: new Date().toISOString() }],
+      visibility: body.visibility === "private" ? "private" : "public", avatarUrl: body.avatarUrl?.trim() || null,
+      joinRequests: [], posts: [],
     };
     db.groups.push(group);
     await persist(db);
@@ -56,24 +50,27 @@ export async function POST(req: NextRequest) {
   }
 
   const group = db.groups.find((g) => g.id === body.groupId);
-  if (!group) return bad("Group not found.", 404);
-
-  if (action === "join") {
-    if (!group.members.some((m) => m.userId === me.id)) {
-      group.members.push({ userId: me.id, role: "member", joinedAt: new Date().toISOString() });
+  if (!group) return bad("Community not found.", 404);
+  group.joinRequests ??= [];
+  group.posts ??= [];
+  const membership = group.members.find((m) => m.userId === me.id);
+  if (body.action === "join") {
+    if (membership) return json({ ok: true, status: "member", myRole: membership.role });
+    if (group.visibility === "private") {
+      if (!group.joinRequests.some((r) => r.userId === me.id)) group.joinRequests.push({ userId: me.id, requestedAt: new Date().toISOString() });
       await persist(db);
+      return json({ ok: true, status: "pending" });
     }
-    return json({ ok: true, myRole: "member" });
+    group.members.push({ userId: me.id, role: "member", joinedAt: new Date().toISOString() });
+    await persist(db);
+    return json({ ok: true, status: "member", myRole: "member" });
   }
-
-  if (action === "leave") {
-    const adminCount = group.members.filter((m) => m.role === "admin").length;
-    const mine = group.members.find((m) => m.userId === me.id);
-    if (mine?.role === "admin" && adminCount === 1) return bad("Promote another admin before leaving.");
+  if (body.action === "leave") {
+    if (membership?.role === "admin" && group.members.filter((m) => m.role === "admin").length === 1) return bad("Assign another admin before leaving.");
     group.members = group.members.filter((m) => m.userId !== me.id);
+    group.joinRequests = group.joinRequests.filter((r) => r.userId !== me.id);
     await persist(db);
     return json({ ok: true, myRole: null });
   }
-
   return bad("Unknown action.");
 }

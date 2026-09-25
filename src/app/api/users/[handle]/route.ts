@@ -11,6 +11,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ handle: st
   // Accept handle ("zoedesigns") or user id ("u_zoe") — notification tiles navigate by id.
   const user = db.users.find((u) => u.handle === handle || u.id === handle);
   if (!user) return bad("User not found.", 404);
+  const viewerSettings=withSettings(me);
+  if(withSettings(user).blocked.includes(me.id)||viewerSettings.blocked.includes(user.id))return bad("User not found.",404);
 
   const posts = db.posts
     .filter((p) => p.authorId === user.id)
@@ -54,4 +56,3 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ handle: st
     },
   });
 }
-

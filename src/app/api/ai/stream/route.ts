@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { requireUser, withSettings } from "@/lib/server";
+import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
@@ -33,6 +35,25 @@ export async function POST(req: Request) {
 
   let prompt = "";
   let context = "";
+  let model = MODEL;
+  let hasSupabasePreference=false;
+  if(process.env.NEXT_PUBLIC_SUPABASE_URL&&process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY){
+    try {
+      const supabase=await createSupabaseServerClient();
+      const {data:{user}}=await supabase.auth.getUser();
+      if(user){
+        const {data}=await supabase.from("user_settings").select("ai_default_model").eq("user_id",user.id).maybeSingle();
+        if(data?.ai_default_model&&["openai/gpt-oss-20b","openai/gpt-oss-120b"].includes(data.ai_default_model)){model=data.ai_default_model;hasSupabasePreference=true;}
+      }
+    } catch { /* fall through to the local app session store */ }
+  }
+  if(!hasSupabasePreference){
+    const auth = await requireUser();
+    if (!("res" in auth)) {
+      const preference = withSettings(auth.me).aiDefaultModel;
+      if (["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(preference)) model = preference;
+    }
+  }
   try {
     const body = (await req.json()) as { prompt?: string; context?: string };
     prompt = (body.prompt ?? "").slice(0, 4000);
@@ -52,7 +73,7 @@ export async function POST(req: Request) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         messages: [
           {
             role: "system",

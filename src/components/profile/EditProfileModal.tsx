@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, ImagePlus, Loader2, X } from "lucide-react";
 import { uploadProfileImage, updateOwnProfile, type ProfileUpdatePatch } from "@/lib/db/profiles";
+import { prepareProfileImage } from "@/lib/image";
 import type { ProfileRow } from "@/lib/db/schema-types";
 
 /** Strict dual-theme input token shared by every field. */
@@ -31,7 +32,7 @@ export default function EditProfileModal({ profile, onClose, onSaved }: EditProf
   const [techInput, setTechInput] = useState("");
   const [techStack, setTechStack] = useState<string[]>(profile.tech_stack ?? []);
   const [avatarUrl, setAvatarUrl] = useState(profile.avatar_url);
-  const [coverUrl, setCoverUrl] = useState(profile.cover_url);
+  const [coverUrl, setCoverUrl] = useState(profile.banner_url || profile.cover_url);
 
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState<"avatar" | "cover" | null>(null);
@@ -64,7 +65,8 @@ export default function EditProfileModal({ profile, onClose, onSaved }: EditProf
     setError(null);
     setUploading(kind);
     try {
-      const url = await uploadProfileImage(file, kind);
+      const prepared = await prepareProfileImage(file, kind === "avatar" ? "avatar" : "banner");
+      const url = await uploadProfileImage(prepared, kind);
       if (kind === "avatar") setAvatarUrl(url);
       else setCoverUrl(url);
     } catch (e) {
@@ -91,7 +93,7 @@ export default function EditProfileModal({ profile, onClose, onSaved }: EditProf
       linkedin_url: linkedinUrl.trim() || null,
       tech_stack: techStack,
       ...(avatarUrl !== profile.avatar_url ? { avatar_url: avatarUrl } : {}),
-      ...(coverUrl !== profile.cover_url ? { cover_url: coverUrl } : {}),
+      ...(coverUrl !== (profile.banner_url || profile.cover_url) ? { cover_url: coverUrl, banner_url: coverUrl } : {}),
     };
     try {
       const fresh = await updateOwnProfile(patch);
@@ -150,10 +152,10 @@ export default function EditProfileModal({ profile, onClose, onSaved }: EditProf
           />
 
           <div className="absolute -bottom-7 left-4">
-            <div className="light:ring-slate-200 dark:ring-zinc-900 relative h-16 w-16 overflow-hidden rounded-full ring-4">
+            <div className="light:ring-slate-200 dark:ring-zinc-900 relative aspect-square h-16 w-16 overflow-hidden rounded-full ring-4">
               {avatarUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={avatarUrl} alt="Avatar preview" className="h-full w-full object-cover" />
+                <img src={avatarUrl} alt="Avatar preview" className="aspect-square h-full w-full rounded-full object-cover" />
               ) : (
                 <span className="light:bg-slate-200 dark:bg-zinc-800 flex h-full w-full items-center justify-center">
                   <Camera size={18} className="light:text-zinc-500 dark:text-zinc-400" />

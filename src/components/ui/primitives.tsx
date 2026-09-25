@@ -37,7 +37,7 @@ export function Avatar({
     <img
       src={user.photo}
       alt={user.name}
-      className="flex items-center justify-center rounded-full object-cover"
+      className="aspect-square shrink-0 rounded-full object-cover"
       style={{ width: size, height: size }}
     />
   ) : (

@@ -42,6 +42,10 @@ export interface GroupsPayload {
     school: string | null;
     memberCount: number;
     myRole: string | null;
+    visibility?: "public" | "private";
+    avatarUrl?: string | null;
+    tags?: string[];
+    myRequestStatus?: "pending" | "none" | "member";
     members: Array<PublicUser & { role: string }>;
   }>;
 }

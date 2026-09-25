@@ -11,7 +11,6 @@ import {
   BarChart3,
   CalendarDays,
   Clapperboard,
-  FileText,
   Paperclip,
   Search,
   Send,
@@ -22,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { useToast } from "@/components/motion/toaster";
+import { uploadPostMedia } from "@/lib/db/profiles";
 import { cn } from "@/lib/utils";
 
 /* ============================== shared types ============================== */
@@ -41,6 +41,7 @@ export interface EventDraft {
   date: string;
   time: string;
   endTime: string;
+  duration: string;
   venue: string;
   capacity: string; // "" = unlimited
   category: string;
@@ -57,9 +58,7 @@ export interface ComposerResult {
 
 /* ============================== constants ============================== */
 
-const MAX_CHARS = 280;
-
-const AUDIENCES = ["Everyone", "Connections Only", "School/Campus Only"] as const;
+const AUDIENCES = ["Everyone", "Connections Only", "Campus Only"] as const;
 
 const CATEGORIES = ["Hackathon", "Workshop", "Gaming", "Casual", "Study Group", "Sports"];
 
@@ -85,6 +84,7 @@ const EVENT_PLACEHOLDER: EventDraft = {
   date: "",
   time: "",
   endTime: "",
+  duration: "60",
   venue: "",
   capacity: "",
   category: CATEGORIES[0],
@@ -98,7 +98,7 @@ function Tooltip({ label, children }: { label: string; children: React.ReactNode
   return (
     <span className="group/tt relative inline-flex">
       {children}
-      <span className="pointer-events-none absolute -top-9 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-zinc-950/90 px-2 py-1 text-[10px] font-medium text-zinc-200 opacity-0 shadow-lg backdrop-blur-xl transition-opacity duration-150 group-hover/tt:opacity-100">
+      <span className="pointer-events-none absolute -top-9 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-950/90 px-2 py-1 text-[10px] font-medium text-zinc-200 light:text-zinc-800 opacity-0 shadow-lg backdrop-blur-xl transition-opacity duration-150 group-hover/tt:opacity-100">
         {label}
       </span>
     </span>
@@ -120,45 +120,16 @@ function Popover({
   return (
     <>
       <div className="fixed inset-0 z-30" onClick={onClose} aria-hidden="true" />
-      <div className="absolute bottom-12 left-0 z-40 w-72 rounded-xl border border-white/10 bg-zinc-950/95 p-3 shadow-[0_8px_32px_0_rgba(0,0,0,0.5)] backdrop-blur-xl">
-        <p className="mb-2 flex items-center justify-between text-xs font-semibold text-zinc-200">
+      <div className="absolute bottom-12 left-0 z-40 w-72 rounded-xl border border-white/10 light:border-zinc-200/80 bg-zinc-950/95 p-3 shadow-[0_8px_32px_0_rgba(0,0,0,0.5)] backdrop-blur-xl">
+        <p className="mb-2 flex items-center justify-between text-xs font-semibold text-zinc-200 light:text-zinc-800">
           {title}
-          <button onClick={onClose} className="text-zinc-500 transition hover:text-zinc-200" aria-label={`Close ${title}`}>
+          <button onClick={onClose} className="text-zinc-500 transition hover:text-zinc-200 light:text-zinc-800" aria-label={`Close ${title}`}>
             <X size={13} />
           </button>
         </p>
         {children}
       </div>
     </>
-  );
-}
-
-/** Character ring — circular progress around the remaining count. */
-function CharRing({ count }: { count: number }) {
-  const remaining = MAX_CHARS - count;
-  const pct = Math.min(count / MAX_CHARS, 1);
-  const R = 9;
-  const C = 2 * Math.PI * R;
-  const over = remaining < 0;
-  return (
-    <span className="flex items-center gap-1.5 text-[11px] tabular-nums text-zinc-500">
-      <svg width="24" height="24" viewBox="0 0 24 24" className={over ? "-rotate-90 text-rose-400" : "-rotate-90"}>
-        <circle cx="12" cy="12" r={R} fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="2.5" />
-        <circle
-          cx="12"
-          cy="12"
-          r={R}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeDasharray={C}
-          strokeDashoffset={C * (1 - pct)}
-          className={cn("transition-[stroke-dashoffset] duration-300", over ? "text-rose-400" : pct > 0.85 ? "text-amber-400" : "text-violet-400")}
-        />
-      </svg>
-      <span className={cn(over && "font-semibold text-rose-400")}>{Math.abs(remaining)}</span>
-    </span>
   );
 }
 
@@ -174,6 +145,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
 
   // ---- attachments
   const [media, setMedia] = useState<string[]>([]);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [gifOpen, setGifOpen] = useState(false);
   const [gifQuery, setGifQuery] = useState("");
@@ -199,7 +171,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
         if (d.text) setText(d.text);
         if (d.audience) setAudience(d.audience);
         if (d.poll) setPoll(d.poll);
-        if (d.event) setEvent(d.event);
+        if (d.event) setEvent({ ...EVENT_PLACEHOLDER, ...d.event });
         if (d.media) setMedia(d.media);
       }
     } catch {
@@ -215,22 +187,31 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
     }
   }, [kind, text, audience, poll, event, media]);
 
-  const overLimit = text.length > MAX_CHARS;
-
   const canPost = useMemo(() => {
-    if (overLimit) return false;
     if (kind === "poll") return poll.question.trim() && poll.options.filter((o) => o.trim()).length >= 2;
     if (kind === "event") return event.title.trim() && event.date && event.time && event.venue.trim();
     return text.trim().length > 0 || media.length > 0;
-  }, [kind, text, media, poll, event, overLimit]);
+  }, [kind, text, media, poll, event]);
 
   /* ---------- actions ---------- */
 
-  function attachFiles(files: FileList | null) {
+  async function attachFiles(files: FileList | null) {
     if (!files?.length) return;
-    const names = [...files].map((f) => `${f.type.startsWith("image") ? "🖼" : f.type.startsWith("video") ? "🎬" : "📄"} ${f.name}`);
-    setMedia((prev) => [...prev, ...names].slice(0, 4));
-    toast({ kind: "success", title: `${names.length} attachment${names.length > 1 ? "s" : ""} added` });
+    const selected = [...files].slice(0, Math.max(0, 4 - media.length));
+    if (!selected.length) {
+      toast({ kind: "error", title: "You can attach up to four files." });
+      return;
+    }
+    setUploadingMedia(true);
+    try {
+      const urls = await Promise.all(selected.map(uploadPostMedia));
+      setMedia((prev) => [...prev, ...urls].slice(0, 4));
+      toast({ kind: "success", title: `${urls.length} attachment${urls.length > 1 ? "s" : ""} added` });
+    } catch (error) {
+      toast({ kind: "error", title: "Upload failed", description: error instanceof Error ? error.message : "Couldn't attach those files." });
+    } finally {
+      setUploadingMedia(false);
+    }
   }
 
   function insertEmoji(emoji: string) {
@@ -257,7 +238,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: `Rewrite this social post so it is sharper and more engaging. Keep the voice, keep it under 280 characters, reply with ONLY the rewritten post.\n\nPost: ${draft}`,
+          prompt: `Rewrite this social post so it is sharper and more engaging. Keep the voice and key details, reply with ONLY the rewritten post.\n\nPost: ${draft}`,
         }),
       });
       const ctype = res.headers.get("content-type") ?? "";
@@ -328,15 +309,15 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
   /* ============================== render ============================== */
 
   return (
-    <div className="liquid-glass relative p-4">
+    <div className="relative rounded-2xl border border-zinc-800/80 bg-zinc-900/60 p-4 text-zinc-100 backdrop-blur-md light:border-zinc-200/80 light:bg-white/80 light:text-zinc-900">
       {/* ---- top row: audience selector + active-mode chip ---- */}
       <div className="mb-2 flex items-center justify-between gap-2">
-        <label className="flex items-center gap-1.5 rounded-full border border-white/10 bg-zinc-900/50 px-2.5 py-1 text-[11px] font-medium text-zinc-300">
+        <label className="flex items-center gap-1.5 rounded-full border border-white/10 light:border-zinc-200/80 bg-zinc-900/50 light:bg-zinc-100/80 px-2.5 py-1 text-[11px] font-medium text-zinc-300 light:text-zinc-700">
           <Users size={11} className="text-violet-400" />
           <select
             value={audience}
             onChange={(e) => setAudience(e.target.value)}
-            className="cursor-pointer appearance-none bg-transparent pr-1 text-[11px] font-medium text-zinc-300 focus:outline-none [&>option]:bg-zinc-900"
+            className="cursor-pointer appearance-none bg-transparent pr-1 text-[11px] font-medium text-zinc-300 light:text-zinc-700 focus:outline-none [&>option]:bg-zinc-900"
           >
             {AUDIENCES.map((a) => (
               <option key={a}>{a}</option>
@@ -358,7 +339,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="What's your next motion?"
-          className="min-h-16 w-full resize-none bg-transparent text-[15px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+          className="min-h-16 w-full resize-none bg-transparent text-[15px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none light:text-zinc-900"
         />
       ) : (
         <div key={kind} className="composer-swap">
@@ -369,12 +350,12 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
                 value={poll.question}
                 onChange={(e) => setPoll({ ...poll, question: e.target.value })}
                 placeholder="Ask a question…"
-                className="w-full bg-transparent text-[15px] font-semibold text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+                className="w-full bg-transparent text-[15px] font-semibold text-zinc-100 light:text-zinc-900 placeholder:text-zinc-500 focus:outline-none"
               />
               <div className="space-y-2">
                 {poll.options.map((opt, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <span className="grid size-6 shrink-0 place-items-center rounded-full border border-white/10 bg-zinc-900/60 text-[10px] font-bold text-violet-300">
+                    <span className="grid size-6 shrink-0 place-items-center rounded-full border border-white/10 light:border-zinc-200/80 bg-zinc-900/60 light:bg-zinc-100/80 text-[10px] font-bold text-violet-300">
                       {String.fromCharCode(65 + i)}
                     </span>
                     <input
@@ -385,7 +366,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
                         setPoll({ ...poll, options });
                       }}
                       placeholder={`Option ${i + 1}`}
-                      className="h-9 flex-1 rounded-lg border border-white/10 bg-zinc-900/40 px-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-violet-500/50 focus:outline-none"
+                      className="h-9 flex-1 rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-3 text-sm text-zinc-200 light:text-zinc-800 placeholder:text-zinc-600 focus:border-violet-500/50 focus:outline-none"
                     />
                     {poll.options.length > 2 && (
                       <button
@@ -410,12 +391,12 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
 
               {/* duration + votes-per-user + results visibility */}
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                <label className="rounded-lg border border-white/10 bg-zinc-900/40 px-2.5 py-2">
+                <label className="rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-2.5 py-2">
                   <span className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Duration</span>
                   <select
                     value={poll.duration}
                     onChange={(e) => setPoll({ ...poll, duration: e.target.value as PollDraft["duration"] })}
-                    className="w-full cursor-pointer appearance-none bg-transparent text-xs text-zinc-200 focus:outline-none [&>option]:bg-zinc-900"
+                    className="w-full cursor-pointer appearance-none bg-transparent text-xs text-zinc-200 light:text-zinc-800 focus:outline-none [&>option]:bg-zinc-900"
                   >
                     <option value="1">1 Day</option>
                     <option value="3">3 Days</option>
@@ -423,12 +404,12 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
                     <option value="0">No expiration</option>
                   </select>
                 </label>
-                <label className="rounded-lg border border-white/10 bg-zinc-900/40 px-2.5 py-2">
+                <label className="rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-2.5 py-2">
                   <span className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Votes / user</span>
                   <select
                     value={poll.votesPerUser}
                     onChange={(e) => setPoll({ ...poll, votesPerUser: Number(e.target.value) as PollDraft["votesPerUser"] })}
-                    className="w-full cursor-pointer appearance-none bg-transparent text-xs text-zinc-200 focus:outline-none [&>option]:bg-zinc-900"
+                    className="w-full cursor-pointer appearance-none bg-transparent text-xs text-zinc-200 light:text-zinc-800 focus:outline-none [&>option]:bg-zinc-900"
                   >
                     <option value={1}>1 vote</option>
                     <option value={99}>Multiple choice</option>
@@ -438,11 +419,11 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
                   onClick={() => setPoll({ ...poll, hideResults: !poll.hideResults })}
                   className={cn(
                     "flex items-center justify-between rounded-lg border px-2.5 py-2 text-left transition-colors",
-                    poll.hideResults ? "border-violet-500/40 bg-violet-500/10" : "border-white/10 bg-zinc-900/40"
+                    poll.hideResults ? "border-violet-500/40 bg-violet-500/10" : "border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80"
                   )}
                 >
-                  <span className="text-xs text-zinc-300">{poll.hideResults ? "Hidden until end" : "Live results"}</span>
-                  <span className={cn("flex h-4 w-7 items-center rounded-full border border-white/10 transition-colors", poll.hideResults ? "bg-violet-500/60" : "bg-zinc-800")}>
+                  <span className="text-xs text-zinc-300 light:text-zinc-700">{poll.hideResults ? "Hidden until end" : "Live results"}</span>
+                  <span className={cn("flex h-4 w-7 items-center rounded-full border border-white/10 light:border-zinc-200/80 transition-colors", poll.hideResults ? "bg-violet-500/60" : "bg-zinc-800")}>
                     <span className={cn("mx-0.5 size-3 rounded-full bg-white transition-transform", poll.hideResults && "translate-x-3")} />
                   </span>
                 </button>
@@ -457,30 +438,40 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
                 value={event.title}
                 onChange={(e) => setEvent({ ...event, title: e.target.value })}
                 placeholder="Event title — e.g. Late-night build session"
-                className="w-full bg-transparent text-[15px] font-semibold text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+                className="w-full bg-transparent text-[15px] font-semibold text-zinc-100 light:text-zinc-900 placeholder:text-zinc-500 focus:outline-none"
               />
-              <div className="grid grid-cols-3 gap-2">
-                <label className="rounded-lg border border-white/10 bg-zinc-900/40 px-2.5 py-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <label className="rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-2.5 py-2">
                   <span className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Date</span>
-                  <input type="date" value={event.date} onChange={(e) => setEvent({ ...event, date: e.target.value })} className="w-full bg-transparent text-xs text-zinc-200 [color-scheme:dark] focus:outline-none" />
+                  <input type="date" value={event.date} onChange={(e) => setEvent({ ...event, date: e.target.value })} className="w-full bg-transparent text-xs text-zinc-200 light:text-zinc-800 [color-scheme:dark] focus:outline-none" />
                 </label>
-                <label className="rounded-lg border border-white/10 bg-zinc-900/40 px-2.5 py-2">
+                <label className="rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-2.5 py-2">
                   <span className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Start</span>
-                  <input type="time" value={event.time} onChange={(e) => setEvent({ ...event, time: e.target.value })} className="w-full bg-transparent text-xs text-zinc-200 [color-scheme:dark] focus:outline-none" />
+                  <input type="time" value={event.time} onChange={(e) => setEvent({ ...event, time: e.target.value })} className="w-full bg-transparent text-xs text-zinc-200 light:text-zinc-800 [color-scheme:dark] focus:outline-none" />
                 </label>
-                <label className="rounded-lg border border-white/10 bg-zinc-900/40 px-2.5 py-2">
+                <label className="rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-2.5 py-2">
                   <span className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Ends</span>
-                  <input type="time" value={event.endTime} onChange={(e) => setEvent({ ...event, endTime: e.target.value })} className="w-full bg-transparent text-xs text-zinc-200 [color-scheme:dark] focus:outline-none" />
+                  <input type="time" value={event.endTime} onChange={(e) => setEvent({ ...event, endTime: e.target.value })} className="w-full bg-transparent text-xs text-zinc-200 light:text-zinc-800 [color-scheme:dark] focus:outline-none" />
+                </label>
+                <label className="rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-2.5 py-2">
+                  <span className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Estimated duration</span>
+                  <select value={event.duration} onChange={(e) => setEvent({ ...event, duration: e.target.value })} className="w-full cursor-pointer appearance-none bg-transparent text-xs text-zinc-200 light:text-zinc-800 focus:outline-none [&>option]:bg-zinc-900">
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                    <option value="90">1.5 hours</option>
+                    <option value="120">2 hours</option>
+                    <option value="180">3 hours</option>
+                  </select>
                 </label>
               </div>
               <input
                 value={event.venue}
                 onChange={(e) => setEvent({ ...event, venue: e.target.value })}
                 placeholder="Venue — Google Meet / Campus Quad / Room 402"
-                className="h-9 w-full rounded-lg border border-white/10 bg-zinc-900/40 px-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-violet-500/50 focus:outline-none"
+                className="h-9 w-full rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-3 text-sm text-zinc-200 light:text-zinc-800 placeholder:text-zinc-600 focus:border-violet-500/50 focus:outline-none"
               />
               <div className="grid grid-cols-2 gap-2">
-                <label className="rounded-lg border border-white/10 bg-zinc-900/40 px-2.5 py-2">
+                <label className="rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-2.5 py-2">
                   <span className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Capacity</span>
                   <input
                     type="number"
@@ -488,15 +479,15 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
                     placeholder="Unlimited"
                     value={event.capacity}
                     onChange={(e) => setEvent({ ...event, capacity: e.target.value })}
-                    className="w-full bg-transparent text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
+                    className="w-full bg-transparent text-xs text-zinc-200 light:text-zinc-800 placeholder:text-zinc-600 focus:outline-none"
                   />
                 </label>
-                <label className="rounded-lg border border-white/10 bg-zinc-900/40 px-2.5 py-2">
+                <label className="rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/40 light:bg-zinc-100/80 px-2.5 py-2">
                   <span className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Category</span>
                   <select
                     value={event.category}
                     onChange={(e) => setEvent({ ...event, category: e.target.value })}
-                    className="w-full cursor-pointer appearance-none bg-transparent text-xs text-zinc-200 focus:outline-none [&>option]:bg-zinc-900"
+                    className="w-full cursor-pointer appearance-none bg-transparent text-xs text-zinc-200 light:text-zinc-800 focus:outline-none [&>option]:bg-zinc-900"
                   >
                     {CATEGORIES.map((c) => (
                       <option key={c}>{c}</option>
@@ -511,7 +502,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
                   e.preventDefault();
                   attachFiles(e.dataTransfer.files);
                 }}
-                className="flex h-16 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-white/15 bg-zinc-900/30 text-xs text-zinc-500 transition hover:border-violet-500/40 hover:text-violet-300"
+                className="flex h-16 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-white/15 bg-zinc-900/30 light:bg-zinc-100/60 text-xs text-zinc-500 transition hover:border-violet-500/40 hover:text-violet-300"
               >
                 <Clapperboard size={14} />
                 Drop an event poster, or click to upload
@@ -526,7 +517,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={kind === "poll" ? "Add context (optional)…" : "Add a caption (optional)…"}
-            className="mt-3 min-h-10 w-full resize-none bg-transparent text-sm text-zinc-300 placeholder:text-zinc-600 focus:outline-none"
+            className="mt-3 min-h-10 w-full resize-none bg-transparent text-sm text-zinc-300 light:text-zinc-700 placeholder:text-zinc-600 focus:outline-none"
           />
         </div>
       )}
@@ -535,9 +526,11 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
       {media.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {media.map((m, i) => (
-            <span key={`${m}-${i}`} className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-zinc-900/60 px-2 py-1 text-[11px] text-zinc-300">
-              {m}
-              <button onClick={() => setMedia((prev) => prev.filter((_, j) => j !== i))} className="text-zinc-500 transition hover:text-rose-400" aria-label={`Remove ${m}`}>
+            <span key={`${m}-${i}`} className="relative flex h-20 max-w-44 items-center gap-1.5 overflow-hidden rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/60 light:bg-zinc-100/80 px-2 py-1 text-[11px] text-zinc-300 light:text-zinc-700">
+              {m.startsWith("data:image/") || /\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(m) ? <img src={m} alt="Post attachment preview" className="h-full max-w-32 rounded object-cover" />
+                : m.startsWith("data:video/") || /\.(mp4|webm|mov)(\?.*)?$/i.test(m) ? <video src={m} controls className="h-full max-w-32 rounded object-cover" />
+                  : <span className="max-w-32 truncate">{m.split("/").pop()}</span>}
+              <button onClick={() => setMedia((prev) => prev.filter((_, j) => j !== i))} className="absolute right-1 top-1 grid size-5 place-items-center rounded-full bg-zinc-950/80 text-zinc-400 transition hover:text-rose-400" aria-label={`Remove attachment ${i + 1}`}>
                 <X size={12} />
               </button>
             </span>
@@ -546,7 +539,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
       )}
 
       {/* ---- toolbar ---- */}
-      <div className="mt-2 flex items-center justify-between border-t border-white/10 pt-2.5">
+      <div className="mt-2 flex items-center justify-between border-t border-white/10 light:border-zinc-200/80 pt-2.5">
         <div className="flex items-center gap-0.5 text-zinc-500">
           {/* media attach */}
           <Tooltip label="Attach media — images, video, docs">
@@ -571,9 +564,9 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
               </button>
             </Tooltip>
             <Popover open={gifOpen} onClose={() => setGifOpen(false)} title="Trending GIFs">
-              <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-white/10 bg-zinc-900/60 px-2 py-1.5">
+              <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-white/10 light:border-zinc-200/80 bg-zinc-900/60 light:bg-zinc-100/80 px-2 py-1.5">
                 <Search size={12} className="text-zinc-500" />
-                <input value={gifQuery} onChange={(e) => setGifQuery(e.target.value)} placeholder="Search GIFs" className="w-full bg-transparent text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none" />
+                <input value={gifQuery} onChange={(e) => setGifQuery(e.target.value)} placeholder="Search GIFs" className="w-full bg-transparent text-xs text-zinc-200 light:text-zinc-800 placeholder:text-zinc-600 focus:outline-none" />
               </div>
               <div className="grid grid-cols-4 gap-1.5">
                 {TRENDING_GIFS.filter((g) => g.label.includes(gifQuery.toLowerCase())).map((g) => (
@@ -613,7 +606,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
                   <button
                     key={s.name}
                     onClick={() => setEmojiTab(i)}
-                    className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold transition", emojiTab === i ? "bg-violet-500/20 text-violet-300" : "text-zinc-500 hover:text-zinc-300")}
+                    className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold transition", emojiTab === i ? "bg-violet-500/20 text-violet-300" : "text-zinc-500 hover:text-zinc-300 light:text-zinc-700")}
                   >
                     {s.name}
                   </button>
@@ -666,10 +659,9 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
 
         {/* right side: char ring + submit */}
         <div className="flex items-center gap-3">
-          {kind === "standard" && text.length > 0 && <CharRing count={text.length} />}
           <button
             onClick={submit}
-            disabled={!canPost}
+            disabled={!canPost || uploadingMedia}
             className="flex h-9 items-center gap-1.5 rounded-full bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-500 hover:shadow-[0_0_18px_rgba(139,92,246,0.35)] disabled:opacity-40 disabled:shadow-none"
           >
             <Send size={13} />

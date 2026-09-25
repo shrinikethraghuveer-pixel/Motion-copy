@@ -1,4 +1,4 @@
-import { json, requireUser, toPublicUser } from "@/lib/server";
+import { hydratePost, json, requireUser, toPublicUser, withSettings } from "@/lib/server";
 
 export async function GET() {
   const auth = await requireUser();
@@ -6,8 +6,14 @@ export async function GET() {
   const { me, db } = auth;
 
   const classmates = db.users.filter((u) => u.school === me.school && u.id !== me.id);
+  const friends=new Set(db.connections.filter(c=>c.status==="accepted"&&(c.requesterId===me.id||c.targetId===me.id)).map(c=>c.requesterId===me.id?c.targetId:c.requesterId));
   const savedPosts = db.posts
-    .filter((p) => p.savedBy.includes(me.id))
+    .filter((p) => {
+      if(!p.savedBy.includes(me.id))return false;
+      const author=db.users.find(u=>u.id===p.authorId);if(!author||author.deactivatedAt)return false;
+      const s=withSettings(author),mine=withSettings(me);
+      return (!s.privateProfile||friends.has(author.id)||author.id===me.id)&&!s.blocked.includes(me.id)&&!mine.blocked.includes(author.id)&&!mine.muted.includes(author.id);
+    })
     .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
   const events = savedPosts
     .filter((p) => p.event)
@@ -25,7 +31,7 @@ export async function GET() {
   return json({
     school: me.school,
     classmates: classmates.map((u) => toPublicUser(db, u, me.id)),
-    saved: savedPosts,
+    saved: savedPosts.map(p=>hydratePost(db,p,me.id)),
     events: events.map((p) => ({ postId: p.id, ...p.event! })),
     schoolGroups: schoolGroups.map((g) => ({ id: g.id, name: g.name, tag: g.tag, memberCount: g.members.length, myRole: g.members.find((m) => m.userId === me.id)?.role ?? null })),
     myGroups: myGroups.map((g) => ({ id: g.id, name: g.name, tag: g.tag, memberCount: g.members.length, myRole: g.members.find((m) => m.userId === me.id)?.role ?? null })),

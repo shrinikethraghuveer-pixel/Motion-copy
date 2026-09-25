@@ -6,10 +6,10 @@ import { motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check, Loader2, Plus } from "lucide-react";
 import { api } from "@/lib/client";
 import { isUsernameAvailable } from "@/lib/supabase/auth";
-import type { PublicUser } from "@/lib/schema";
 import { GRADE_OPTIONS, GOAL_OPTIONS_MULTI, DISCOVERY_SOURCES } from "@/lib/schema";
 import { readWelcomeTags, clearWelcomeTags } from "@/lib/welcome-tags";
 import MotionLogo from "@/components/brand/MotionLogo";
+import { createClient } from "@/lib/supabase/client";
 
 /* ───────────────────────────── constants ───────────────────────────── */
 
@@ -62,7 +62,7 @@ const TAG_ACTIVE =
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const [me, setMe] = useState<PublicUser | null>(null);
+  const [me, setMe] = useState<{ handle: string; age: number } | null>(null);
   const [checking, setChecking] = useState(true);
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -87,20 +87,38 @@ export default function OnboardingPage() {
 
   const allTags = useMemo(() => [...SUGGESTED_INTERESTS, ...customTags], [customTags]);
 
-  // Session + welcome-tag prefill.
+  // Supabase is the source of truth for the post-sign-up hand-off. The old
+  // local demo session must not decide whether a real account can onboard.
   useEffect(() => {
-    api<{ user: PublicUser | null }>("/api/session")
-      .then((d) => {
-        if (!d.user) {
-          router.replace("/welcome");
+    const loadSession = async () => {
+      try {
+        const supabase = createClient();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError || !user) {
+          router.replace("/");
           return;
         }
-        setMe(d.user);
-        setUsername(d.user.handle ?? "");
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("username, age")
+          .eq("id", user.id)
+          .maybeSingle();
+        // OAuth users can reach this page before the profile trigger has
+        // committed. Start from auth metadata; finalization upserts the row.
+        if (profileError) {
+          router.replace("/");
+          return;
+        }
+        const handle = profile?.username ?? user.user_metadata?.username ?? user.email?.split("@")[0] ?? "";
+        setMe({ handle, age: typeof profile?.age === "number" ? profile.age : 16 });
+        setUsername(handle);
         setInterests(readWelcomeTags()); // interests picked on /welcome carry in
         setChecking(false);
-      })
-      .catch(() => router.replace("/welcome"));
+      } catch {
+        router.replace("/");
+      }
+    };
+    void loadSession();
   }, [router]);
 
   useEffect(() => {

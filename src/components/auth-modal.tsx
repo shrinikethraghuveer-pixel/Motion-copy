@@ -27,12 +27,6 @@ interface AuthModalProps {
   onSuccess?: (session: SessionUser | null) => void;
 }
 
-function nextTarget(): string {
-  if (typeof window === "undefined") return "/home";
-  const next = new URLSearchParams(window.location.search).get("next");
-  return next && next.startsWith("/") ? next : "/home";
-}
-
 export function AuthModal({ open, onOpenChange, onSuccess }: AuthModalProps) {
   const router = useRouter();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -40,32 +34,32 @@ export function AuthModal({ open, onOpenChange, onSuccess }: AuthModalProps) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function finish() {
     onOpenChange(false);
-    router.push(nextTarget());
+    router.push(mode === "signup" ? "/onboarding" : "/home");
     router.refresh();
     onSuccess?.(null);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
+    setErrorMessage(null);
     setNotice(null);
     setBusy(true);
     try {
       if (mode === "signup") {
         const uname = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
         if (uname.length < 3) {
-          setError("Username needs 3+ characters (a–z, 0–9, _).");
+          setErrorMessage("Username needs 3+ characters (a–z, 0–9, _).");
           return;
         }
         const res = await signUpWithEmail(email, password, uname, fullName.trim() || undefined);
         if (res.error) {
-          setError(res.error);
+          setErrorMessage(res.error);
           return;
         }
         if (res.needsConfirmation) {
@@ -75,7 +69,7 @@ export function AuthModal({ open, onOpenChange, onSuccess }: AuthModalProps) {
       } else {
         const res = await signInWithEmail(email, password);
         if (res.error) {
-          setError(res.error);
+          setErrorMessage(res.error);
           return;
         }
       }
@@ -97,7 +91,7 @@ export function AuthModal({ open, onOpenChange, onSuccess }: AuthModalProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={mode} onValueChange={(v) => { setMode(v as typeof mode); setError(null); setNotice(null); }}>
+        <Tabs value={mode} onValueChange={(v) => { setMode(v as typeof mode); setErrorMessage(null); setNotice(null); }}>
           <TabsList className="w-full">
             <TabsTrigger value="signin" className="flex-1">Sign in</TabsTrigger>
             <TabsTrigger value="signup" className="flex-1">Create account</TabsTrigger>
@@ -107,15 +101,15 @@ export function AuthModal({ open, onOpenChange, onSuccess }: AuthModalProps) {
             <form onSubmit={handleSubmit} className="mt-2 space-y-3">
               <Input
                 type="email" required placeholder="you@anywhere.com" autoComplete="email"
-                value={email} onChange={(e) => setEmail(e.target.value)}
+                value={email} onChange={(e) => { setEmail(e.target.value); setErrorMessage(null); }}
               />
               <Input
                 type="password" required minLength={8} autoComplete="current-password"
                 placeholder="Password (8+ characters)"
-                value={password} onChange={(e) => setPassword(e.target.value)}
+                value={password} onChange={(e) => { setPassword(e.target.value); setErrorMessage(null); }}
               />
-              {error && <p className="text-sm text-red-400">{error}</p>}
               {notice && <p className="text-sm text-cyan-300">{notice}</p>}
+              {errorMessage && <div className="mb-4 rounded-lg border border-red-800/50 bg-red-950/40 p-3 text-xs font-medium text-red-400">{errorMessage}</div>}
               <Button type="submit" size="pill" disabled={busy} className="w-full">
                 {busy ? <Loader2 className="animate-spin" /> : <Mail />}
                 Sign in
@@ -129,12 +123,12 @@ export function AuthModal({ open, onOpenChange, onSuccess }: AuthModalProps) {
                 disabled={busy || !email.trim()}
                 className="w-full"
                 onClick={async () => {
-                  setError(null);
+                  setErrorMessage(null);
                   setNotice(null);
                   setBusy(true);
                   const res = await sendMagicLink(email.trim());
                   setBusy(false);
-                  if (res.error) setError(res.error);
+                  if (res.error) setErrorMessage(res.error);
                   else setNotice("Magic link sent — check your inbox to finish signing in.");
                 }}
               >
@@ -153,24 +147,24 @@ export function AuthModal({ open, onOpenChange, onSuccess }: AuthModalProps) {
                 <Input
                   required placeholder="Username" autoComplete="username"
                   title="3+ characters: a–z, 0–9, underscore"
-                  value={username} onChange={(e) => setUsername(e.target.value)}
+                  value={username} onChange={(e) => { setUsername(e.target.value); setErrorMessage(null); }}
                 />
                 <Input
                   placeholder="Full name (optional)" autoComplete="name"
-                  value={fullName} onChange={(e) => setFullName(e.target.value)}
+                  value={fullName} onChange={(e) => { setFullName(e.target.value); setErrorMessage(null); }}
                 />
               </div>
               <Input
                 type="email" required placeholder="you@anywhere.com" autoComplete="email"
-                value={email} onChange={(e) => setEmail(e.target.value)}
+                value={email} onChange={(e) => { setEmail(e.target.value); setErrorMessage(null); }}
               />
               <Input
                 type="password" required minLength={8} autoComplete="new-password"
                 placeholder="Password (8+ characters)"
-                value={password} onChange={(e) => setPassword(e.target.value)}
+                value={password} onChange={(e) => { setPassword(e.target.value); setErrorMessage(null); }}
               />
-              {error && <p className="text-sm text-red-400">{error}</p>}
               {notice && <p className="text-sm text-cyan-300">{notice}</p>}
+              {errorMessage && <div className="mb-4 rounded-lg border border-red-800/50 bg-red-950/40 p-3 text-xs font-medium text-red-400">{errorMessage}</div>}
               <Button type="submit" size="pill" disabled={busy} className="w-full">
                 {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
                 Create account

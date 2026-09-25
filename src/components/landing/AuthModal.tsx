@@ -19,7 +19,7 @@ export default function AuthModal({ onClose, initialMode = "signup" }: { onClose
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="relative max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-3xl border light:border-slate-300/80 dark:border-zinc-800/80 light:bg-white dark:bg-zinc-900 p-6 shadow-2xl"
+        className="relative max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-zinc-800 bg-zinc-900 p-6 text-zinc-100 shadow-2xl"
       >
         <button
           onClick={onClose}

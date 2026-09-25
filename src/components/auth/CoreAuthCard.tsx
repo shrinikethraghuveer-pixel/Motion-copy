@@ -3,14 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
-import { post } from "@/lib/client";
 import MotionLogo from "@/components/brand/MotionLogo";
 import { createClient } from "@/lib/supabase/client";
+import { signInWithEmail, signUpWithEmail } from "@/lib/supabase/auth";
 
 /* ───────────────────────── tokens (Obsidian liquid-glass) ───────────────────────── */
 
 const INPUT =
-  "w-full rounded-2xl border light:border-slate-300/80 dark:border-zinc-700 light:bg-slate-100 dark:bg-zinc-800 " +
+  "w-full rounded-lg border border-zinc-700 bg-zinc-800/50 " +
   "px-4 py-3 text-sm light:text-zinc-900 dark:text-zinc-100 outline-none transition-colors " +
   "light:placeholder:text-zinc-400 dark:placeholder:text-zinc-500 " +
   "light:focus:border-violet-500 dark:focus:border-violet-500/70";
@@ -45,8 +45,10 @@ export default function CoreAuthCard({
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
 
-  const set = (key: keyof CoreAuthFields) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (key: keyof CoreAuthFields) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setFields((f) => ({ ...f, [key]: e.target.value }));
+    setErr(null);
+  };
 
   const canSubmit = mode === "signin"
     ? fields.handle.trim().length > 0 && fields.password.length >= 8
@@ -62,21 +64,24 @@ export default function CoreAuthCard({
     setErr(null);
     try {
       if (mode === "signup") {
-        await post("/api/session", {
-          mode: "signup",
-          name: fields.name.trim(),
-          email: fields.email.trim(),
-          handle: fields.handle.trim(),
-          password: fields.password,
-        });
+        const result = await signUpWithEmail(
+          fields.email.trim(),
+          fields.password,
+          fields.handle.trim().replace(/^@+/, "").toLowerCase(),
+          fields.name.trim()
+        );
+        if (result.error) throw new Error(result.error);
+        if (result.needsConfirmation) {
+          setErr("Check your inbox to confirm your email, then sign in.");
+          return;
+        }
         router.push("/onboarding");
+        router.refresh();
       } else {
-        await post("/api/session", {
-          mode: "login",
-          handle: fields.handle.trim(),
-          password: fields.password,
-        });
+        const result = await signInWithEmail(fields.handle.trim(), fields.password);
+        if (result.error) throw new Error(result.error);
         router.push("/home");
+        router.refresh();
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : mode === "signup" ? "Signup failed" : "Sign in failed");
@@ -91,7 +96,7 @@ export default function CoreAuthCard({
       const supabase = createClient();
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
+        options: { redirectTo: `${window.location.origin}/auth/callback?next=/home` },
       });
       if (error) setErr(error.message);
     } catch (error) {
@@ -144,8 +149,8 @@ export default function CoreAuthCard({
           <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm light:text-zinc-400 dark:text-zinc-500">@</span>
           <input
             value={fields.handle}
-            onChange={(e) => setFields((f) => ({ ...f, handle: e.target.value.replace(/^@+/, "").toLowerCase() }))}
-            placeholder="Username"
+            onChange={(e) => { setFields((f) => ({ ...f, handle: e.target.value.replace(/^@+/, "").toLowerCase() })); setErr(null); }}
+            placeholder={mode === "signin" ? "Email or username" : "Username"}
             autoComplete="username"
             maxLength={20}
             className={`${INPUT} pl-9`}
@@ -171,7 +176,7 @@ export default function CoreAuthCard({
         </div>
       </div>
 
-      {err && <p className="mt-3 text-sm light:text-rose-600 dark:text-rose-400">{err}</p>}
+      {err && <div className="mb-4 mt-3 rounded-lg border border-red-800/50 bg-red-950/40 p-3 text-xs font-medium text-red-400">{err}</div>}
 
       <button
         type="submit"

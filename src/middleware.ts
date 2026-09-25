@@ -16,10 +16,6 @@ const LEGACY_SESSION_COOKIE = "motion_session";
 const PROTECTED_ROUTES = ["/home", "/settings", "/profile", "/explore", "/notifications", "/chat", "/my-space", "/connect", "/connections", "/onboarding", "/admin"];
 
 export async function middleware(request: NextRequest) {
-  // Local UI development should not be gated by Supabase or legacy cookies.
-  // Route handlers resolve the seeded development user through getSessionUserId.
-  if (process.env.NODE_ENV === "development") return NextResponse.next();
-
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -61,12 +57,9 @@ export async function middleware(request: NextRequest) {
     (p) => pathname === p || pathname.startsWith(p + "/")
   );
 
-  if (!user && !legacySession && !isPublic) {
-    // New / logged-out visitors land on the welcome page, not the old shell.
+  if (!user && !legacySession && isProtected) {
     const url = request.nextUrl.clone();
     url.pathname = "/welcome";
-    url.search = "";
-    if (isProtected) url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 

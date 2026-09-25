@@ -94,12 +94,32 @@ export async function sendMagicLink(email: string): Promise<AuthResult> {
 
 /** Sign in with email + password. */
 export async function signInWithEmail(
-  email: string,
+  emailOrUsername: string,
   password: string
 ): Promise<AuthResult> {
   const supabase = createClient();
+  const identifier = emailOrUsername.trim();
+  let email = identifier;
+
+  // Supabase password auth accepts an email address. Resolve a Motion username
+  // server-side so the login UI can accept either form without exposing auth
+  // users or a service-role key to the browser.
+  if (!identifier.includes("@")) {
+    try {
+      const response = await fetch("/api/auth/resolve-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: identifier.replace(/^@+/, "") }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { email?: string };
+      if (!response.ok || !payload.email) return { error: "Invalid username or password." };
+      email = payload.email;
+    } catch {
+      return { error: "We couldn't sign you in right now. Please try again." };
+    }
+  }
   const { error } = await supabase.auth.signInWithPassword({ email, password });
-  return { error: error ? error.message : null };
+  return { error: error ? "Invalid email or password." : null };
 }
 
 /** End the current session. */

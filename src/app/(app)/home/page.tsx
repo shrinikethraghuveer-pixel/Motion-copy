@@ -5,6 +5,7 @@ import FeedView from "@/components/feed/FeedView";
 
 /** A deliberately defensive home entry point: no session/profile failure escapes. */
 export default async function HomePage() {
+  // Legacy JSON-store session (demo accounts) — render the feed directly.
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

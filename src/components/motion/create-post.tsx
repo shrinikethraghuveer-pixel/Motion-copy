@@ -135,13 +135,24 @@ function Popover({
 
 /* ============================== main component ============================== */
 
-export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => void }) {
+export function CreatePost({
+  onPost,
+  groupId,
+  defaultAudience = AUDIENCES[0],
+  audienceOptions = AUDIENCES,
+}: {
+  onPost: (result: ComposerResult) => void;
+  /** Optional context marker for scoped composer instances; submission stays caller-owned. */
+  groupId?: string;
+  defaultAudience?: string;
+  audienceOptions?: readonly string[];
+}) {
   const { toast } = useToast();
 
   // ---- mode + shared fields
   const [kind, setKind] = useState<PostKind>("standard");
   const [text, setText] = useState("");
-  const [audience, setAudience] = useState<string>(AUDIENCES[0]);
+  const [audience, setAudience] = useState<string>(defaultAudience);
 
   // ---- attachments
   const [media, setMedia] = useState<string[]>([]);
@@ -301,7 +312,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
     setMedia([]);
     setPoll(POLL_PLACEHOLDER);
     setEvent(EVENT_PLACEHOLDER);
-    setAudience(AUDIENCES[0]);
+    setAudience(defaultAudience);
   }
 
   const modeLabel = kind === "poll" ? "Poll" : kind === "event" ? "Event" : "Post";
@@ -309,7 +320,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
   /* ============================== render ============================== */
 
   return (
-    <div className="relative rounded-2xl border border-zinc-800/80 bg-zinc-900/60 p-4 text-zinc-100 backdrop-blur-md light:border-zinc-200/80 light:bg-white/80 light:text-zinc-900">
+    <div data-group-id={groupId} className="relative rounded-2xl border border-zinc-800/80 bg-zinc-900/60 p-4 text-zinc-100 backdrop-blur-md light:border-zinc-200/80 light:bg-white/80 light:text-zinc-900">
       {/* ---- top row: audience selector + active-mode chip ---- */}
       <div className="mb-2 flex items-center justify-between gap-2">
         <label className="flex items-center gap-1.5 rounded-full border border-white/10 light:border-zinc-200/80 bg-zinc-900/50 light:bg-zinc-100/80 px-2.5 py-1 text-[11px] font-medium text-zinc-300 light:text-zinc-700">
@@ -319,7 +330,7 @@ export function CreatePost({ onPost }: { onPost: (result: ComposerResult) => voi
             onChange={(e) => setAudience(e.target.value)}
             className="cursor-pointer appearance-none bg-transparent pr-1 text-[11px] font-medium text-zinc-300 light:text-zinc-700 focus:outline-none [&>option]:bg-zinc-900"
           >
-            {AUDIENCES.map((a) => (
+            {audienceOptions.map((a) => (
               <option key={a}>{a}</option>
             ))}
           </select>

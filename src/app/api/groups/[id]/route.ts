@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bad, json, persist, readBody, requireUser, toPublicUser } from "@/lib/server";
+import type { EventMeta, PollMeta } from "@/lib/schema";
 import { newId } from "@/lib/session";
 import { screenUserText } from "@/lib/moderation";
 
@@ -48,7 +49,28 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { id } = await params;
   const group = db.groups.find((entry) => entry.id === id);
   if (!group) return bad("Community not found.", 404);
-  const body = await readBody<{ action?: string; text?: string; postId?: string; userId?: string; decision?: "accept" | "decline"; role?: "moderator" | "member" }>(req);
+  const body = await readBody<{
+    action?: string;
+    group_id?: string;
+    content?: string;
+    audience_scope?: "Everyone" | "Community Only" | "Members Only";
+    media_urls?: string[];
+    gif_url?: string | null;
+    poll_data?: { question?: string; options?: string[]; duration?: "1" | "3" | "7" | "0"; multipleChoice?: boolean; hideResults?: boolean };
+    event_data?: { title?: string; date?: string; location?: string; kind?: string; endTime?: string; durationMinutes?: number; capacity?: number | null; category?: string; link?: string };
+    text?: string;
+    postId?: string;
+    userId?: string;
+    decision?: "accept" | "decline";
+    role?: "moderator" | "member";
+    type?: "standard" | "event" | "poll";
+    audience?: "Everyone" | "Community Only" | "Members Only";
+    mediaUrls?: string[];
+    options?: string[];
+    poll?: { question?: string; options?: string[]; duration?: "1" | "3" | "7" | "0"; multipleChoice?: boolean; hideResults?: boolean };
+    event?: { title?: string; date?: string; location?: string; kind?: string; endTime?: string; durationMinutes?: number; capacity?: number | null; category?: string; link?: string };
+  }>(req);
+  if (body.group_id && body.group_id !== id) return bad("Community scope does not match this discussion.", 400);
   const mine = group.members.find((member) => member.userId === me.id);
   const isAdmin = mine?.role === "admin";
   const canModerate = isAdmin || mine?.role === "moderator";
@@ -65,18 +87,112 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   if (body.action === "post" || body.action === "reply") {
     if (!mine) return bad("Join this community to post.", 403);
-    const text = (body.text ?? "").trim();
-    if (!text || text.length > 2000) return bad("Write a message up to 2,000 characters.");
-    const screening = screenUserText(text);
+    const text = (body.content ?? body.text ?? "").trim();
+    if (text.length > 2000) return bad("Write a message up to 2,000 characters.");
+    // Rich posts (poll/event/media) may carry only a caption — plain replies must have text.
+    if (body.action === "reply" && !text) return bad("Write a message up to 2,000 characters.");
+    const screening = screenUserText(
+      [text, body.event?.title, body.event?.location, body.poll?.question, ...(body.poll?.options ?? [])].filter(Boolean).join(" ")
+    );
     if (!screening.allowed) return bad(screening.reason, 422);
-    if (body.action === "post") group.posts.unshift({ id: newId("cp"), authorId: me.id, text, createdAt: new Date().toISOString(), pinned: false, replies: [] });
-    else {
+    if (body.action === "post") {
+      // Rich post — composer parity with the global feed.
+      const rawMediaUrls = body.media_urls ?? body.mediaUrls;
+      const mediaUrls = Array.isArray(rawMediaUrls)
+        ? rawMediaUrls.filter((url): url is string => typeof url === "string" && url.length > 0).slice(0, 4)
+        : [];
+      const kind = body.type === "poll" ? "poll" : body.type === "event" ? "event" : "standard";
+      const audienceScope = body.audience_scope ?? body.audience;
+      const audience = audienceScope === "Everyone" || audienceScope === "Members Only" ? audienceScope : "Community Only";
+      const pollInput = body.poll_data ?? body.poll;
+      const eventInput = body.event_data ?? body.event;
+
+      let poll: PollMeta | null = null;
+      if (kind === "poll") {
+        const options = (pollInput?.options ?? []).map((option) => option.trim()).filter(Boolean);
+        if (!(pollInput?.question ?? "").trim()) return bad("Add a question to your poll.");
+        if (options.length < 2 || options.length > 6) return bad("Polls need between 2 and 6 options.");
+        poll = {
+          question: pollInput!.question!.trim(),
+          options: options.map((option, index) => ({ id: `option_${index + 1}`, text: option, votes: [] })),
+          duration: pollInput?.duration ?? "1",
+          multipleChoice: pollInput?.multipleChoice ?? false,
+          hideResults: pollInput?.hideResults ?? false,
+          totalVotes: 0,
+        };
+      }
+
+      let event: EventMeta | null = null;
+      if (kind === "event") {
+        if (!eventInput?.title || !eventInput?.date || !eventInput?.location) return bad("Events need a title, date, and location.");
+        const eventDate = new Date(eventInput.date);
+        if (Number.isNaN(eventDate.getTime())) return bad("Enter a valid event date and time.");
+        const capacity = eventInput.capacity ?? null;
+        if (capacity !== null && (!Number.isInteger(capacity) || capacity < 2)) return bad("Event capacity must be at least 2.");
+        event = {
+          title: eventInput.title.trim(),
+          date: eventDate.toISOString(),
+          location: eventInput.location.trim(),
+          kind: eventInput.kind === "hackathon" ? "hackathon" : "event",
+          endTime: eventInput.endTime || undefined,
+          durationMinutes: eventInput.durationMinutes || undefined,
+          capacity,
+          category: eventInput.category,
+          attendeeIds: [],
+          posterUrl: mediaUrls[0] ?? null,
+          link: eventInput.link || undefined,
+        };
+      }
+
+      if (kind === "standard" && !text && mediaUrls.length === 0) return bad("Write something or attach a visual first.");
+
+      group.posts.unshift({
+        id: newId("cp"),
+        authorId: me.id,
+        text,
+        createdAt: new Date().toISOString(),
+        pinned: false,
+        audience,
+        replies: [],
+        mediaUrls: mediaUrls.length > 0 ? mediaUrls : null,
+        poll,
+        event,
+      });
+    } else {
       const post = group.posts.find((entry) => entry.id === body.postId);
       if (!post) return bad("Discussion not found.", 404);
       post.replies.push({ id: newId("cr"), authorId: me.id, text, createdAt: new Date().toISOString() });
     }
     await persist(db);
     return json({ ok: true });
+  }
+
+  if (body.action === "vote") {
+    if (!mine) return bad("Join this community to vote.", 403);
+    const post = group.posts.find((entry) => entry.id === body.postId);
+    if (!post?.poll) return bad("Poll not found.", 404);
+    const poll = post.poll;
+    const selected = Array.isArray(body.options) ? body.options.filter((id): id is string => poll.options.some((option) => option.id === id)) : [];
+    if (selected.length === 0) return bad("Choose a valid poll option.");
+    if (!poll.multipleChoice && selected.length > 1) return bad("This poll allows one choice per person.");
+    for (const option of poll.options) {
+      if (selected.includes(option.id) && !option.votes.includes(me.id)) option.votes.push(me.id);
+    }
+    poll.totalVotes = new Set(poll.options.flatMap((option) => option.votes)).size;
+    await persist(db);
+    return json({ ok: true });
+  }
+
+  if (body.action === "rsvp") {
+    if (!mine) return bad("Join this community to RSVP.", 403);
+    const post = group.posts.find((entry) => entry.id === body.postId);
+    if (!post?.event) return bad("Event not found.", 404);
+    const attendees = post.event.attendeeIds ?? (post.event.attendeeIds = []);
+    const index = attendees.indexOf(me.id);
+    if (index >= 0) attendees.splice(index, 1);
+    else attendees.push(me.id);
+    await persist(db);
+    return json({ ok: true, going: index < 0 });
   }
 
   if (body.action === "pin") {

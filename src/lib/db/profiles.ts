@@ -177,7 +177,7 @@ async function fetchFromSupabase(username: string): Promise<ProfilePageData> {
     isSelf,
     locked: false,
     source: "supabase",
-    school: null,
+    school: row.school ?? row.institution_custom_name ?? null,
     goal: row.goal ?? null,
     interests: row.interests ?? [],
   };

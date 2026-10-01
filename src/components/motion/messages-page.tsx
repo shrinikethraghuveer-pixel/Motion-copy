@@ -16,7 +16,7 @@ type Item = { id: string; senderId: string; text: string; createdAt: string };
 type Active = { kind: "dm"; id: string } | { kind: "group"; id: string };
 
 export default function MessagesPage() {
-  const { refreshChats } = useSession();
+  const { me, refreshChats } = useSession();
   const { toast } = useUI();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [groups, setGroups] = useState<DmGroupSummary[]>([]);
@@ -102,15 +102,23 @@ export default function MessagesPage() {
   const send = async () => {
     const text = draft.trim(); if (!active || !text) return; setDraft("");
     try {
-      if (active.kind === "group") await sendGroupMessage(active.id, text);
-      else await post("/api/chats", { action: "send", chatId: active.id, text });
-      if (active.kind === "dm") { const r = await api<{ messages: ChatMessage[] }>(`/api/chats?chatId=${encodeURIComponent(active.id)}`); setItems(r.messages.map((m) => ({ id:m.id,senderId:m.senderId,text:m.text,createdAt:m.createdAt }))); }
+      if (active.kind === "group") {
+        await sendGroupMessage(active.id, text);
+        // Legacy stores have no realtime — refetch so the sent message shows.
+        const detail = await getGroupDetail(active.id);
+        setGroupDetail(detail.group);
+        setItems(detail.messages.map((m) => ({ id: m.id, senderId: m.senderId, text: m.text, createdAt: m.createdAt })));
+      } else {
+        await post("/api/chats", { action: "send", chatId: active.id, text });
+        const r = await api<{ messages: ChatMessage[] }>(`/api/chats?chatId=${encodeURIComponent(active.id)}`);
+        setItems(r.messages.map((m) => ({ id:m.id,senderId:m.senderId,text:m.text,createdAt:m.createdAt })));
+      }
       refreshChats();
     } catch (e) { toast(e instanceof Error ? e.message : "Message failed to send"); setDraft(text); }
   };
 
   const dmThread = active?.kind === "dm" ? threads.find((t) => t.id === active.id) : null;
-  const currentUserId = groupDetail?.members.find((m) => m.user.isSelf)?.user.id;
+  const currentUserId = me?.id ?? groupDetail?.members.find((m) => m.user.isSelf)?.user.id ?? null;
 
   return <div className="min-h-[calc(100vh-5rem)] bg-slate-200/70 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
     <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-6xl flex-col px-4 py-6">
@@ -124,7 +132,7 @@ export default function MessagesPage() {
         </aside>
         <section className="col-span-12 flex min-h-0 flex-col bg-zinc-950/20 md:col-span-8">{!active?<div className="flex flex-1 items-center justify-center"><EmptyState icon={<MessageCircle size={28}/>} title="Pick a conversation" hint="Search for someone or create a group."/></div>:<>
           <header className="flex items-center gap-3 border-b border-zinc-800 p-4">{active.kind==="group"?<button onClick={()=>setShowInfo(true)} className="flex min-w-0 flex-1 items-center gap-3 text-left"><span className="grid size-10 place-items-center rounded-xl bg-violet-600/20"><Users size={18}/></span><span><b className="block">{groupDetail?.name ?? groups.find(g=>g.id===active.id)?.name}</b><small className="text-zinc-500">{groupDetail?.memberCount ?? ""} members · Group chat</small></span></button>:dmThread&&<><Avatar user={dmThread.other} size={40}/><div><b className="block">{dmThread.other.name}</b><small className="text-zinc-500">@{dmThread.other.handle}</small></div></>}</header>
-          {showInfo&&groupDetail?<GroupInfoPanel group={groupDetail} isCreator={groupDetail.createdBy===currentUserId} onClose={()=>setShowInfo(false)} onChanged={()=>void getGroupDetail(groupDetail.id).then((r)=>setGroupDetail(r.group))} onLeave={async()=>{await import("@/lib/dm-backends").then(m=>m.leaveGroup(groupDetail.id)); setShowInfo(false);setActive(null);await reload();}}/>:<><div className="flex-1 overflow-y-auto p-4">{items.map(m=><div key={m.id} className={`mb-3 flex ${m.senderId===dmThread?.other.id?"justify-start":"justify-end"}`}><div className={`max-w-[75%] rounded-2xl p-3 text-sm ${m.senderId===dmThread?.other.id?"border border-zinc-700/40 bg-zinc-800/60":"bg-violet-600 text-white"}`}>{m.text}<small className="mt-1 block text-right opacity-60">{timeAgo(m.createdAt)}</small></div></div>)}<div ref={bottom}/></div><div className="border-t border-zinc-800 p-4"><div className="flex gap-2 rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-2"><input value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.nativeEvent.isComposing&&void send()} placeholder="Write a message..." className="w-full bg-transparent text-sm outline-none"/><button onClick={()=>void send()} disabled={!draft.trim()}><Send size={17}/></button></div></div></>}
+          {showInfo&&groupDetail?<GroupInfoPanel group={groupDetail} isCreator={groupDetail.createdBy===currentUserId} onClose={()=>setShowInfo(false)} onChanged={()=>void getGroupDetail(groupDetail.id).then((r)=>setGroupDetail(r.group))} onLeave={()=>{ setShowInfo(false); setActive(null); void reload(); }}/>:<><div className="flex-1 overflow-y-auto p-4">{items.map(m=>{ const mine = currentUserId ? m.senderId===currentUserId : m.senderId!==dmThread?.other.id; return <div key={m.id} className={`mb-3 flex ${mine?"justify-end":"justify-start"}`}><div className={`max-w-[75%] rounded-2xl p-3 text-sm ${mine?"bg-violet-600 text-white":"border border-zinc-700/40 bg-zinc-800/60"}`}>{m.text}<small className="mt-1 block text-right opacity-60">{timeAgo(m.createdAt)}</small></div></div>; })}<div ref={bottom}/></div><div className="border-t border-zinc-800 p-4"><div className="flex gap-2 rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-2"><input value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.nativeEvent.isComposing&&void send()} placeholder="Write a message..." className="w-full bg-transparent text-sm outline-none"/><button onClick={()=>void send()} disabled={!draft.trim()}><Send size={17}/></button></div></div></>}
         </>}</section>
       </div>
     </div>

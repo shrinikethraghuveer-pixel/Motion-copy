@@ -128,7 +128,7 @@ export function AuthModal({ open, onOpenChange, onSuccess }: AuthModalProps) {
                   setBusy(true);
                   const res = await sendMagicLink(email.trim());
                   setBusy(false);
-                  if (res.error) setErrorMessage(res.error);
+                  if (res.error) setErrorMessage("We couldn't send a sign-in link. If you don't have an account, choose Create account above.");
                   else setNotice("Magic link sent — check your inbox to finish signing in.");
                 }}
               >

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Check, Loader2, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Loader2, Plus, Search } from "lucide-react";
 import { api } from "@/lib/client";
 import { isUsernameAvailable } from "@/lib/supabase/auth";
 import { GRADE_OPTIONS, GOAL_OPTIONS_MULTI, DISCOVERY_SOURCES } from "@/lib/schema";
@@ -13,7 +13,8 @@ import { createClient } from "@/lib/supabase/client";
 
 /* ───────────────────────────── constants ───────────────────────────── */
 
-const STEPS = ["Stage", "Interests", "Goals", "Discovery"] as const;
+const EDUCATION_STEPS = ["Stage", "Education", "Interests", "Goals", "Discovery"] as const;
+const SELF_TAUGHT_STEPS = ["Stage", "Interests", "Goals", "Discovery"] as const;
 
 const SUGGESTED_INTERESTS = [
   "Coding",
@@ -69,6 +70,13 @@ export default function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [usernameStatus, setUsernameStatus] = useState<"idle" | "checking" | "available" | "taken" | "error">("idle");
+  const [institutionQuery, setInstitutionQuery] = useState("");
+  const [institution, setInstitution] = useState<{ id: string; name: string; city: string | null; state: string | null } | null>(null);
+  const [currentlyInEducationalInstitution, setCurrentlyInEducationalInstitution] = useState<boolean | null>(null);
+  const [institutionNotListed, setInstitutionNotListed] = useState(false);
+  const [customInstitution, setCustomInstitution] = useState("");
+  const [institutionResults, setInstitutionResults] = useState<Array<{ id: string; name: string; city: string | null; state: string | null }>>([]);
+  const [institutionStatus, setInstitutionStatus] = useState<"idle" | "loading" | "error">("idle");
 
   // Step 1 — stage + age
   const [grade, setGrade] = useState<string | null>(null);
@@ -86,6 +94,22 @@ export default function OnboardingPage() {
   const [source, setSource] = useState<string | null>(null);
 
   const allTags = useMemo(() => [...SUGGESTED_INTERESTS, ...customTags], [customTags]);
+  const requiresEducation = grade !== "self_taught";
+  const steps = requiresEducation ? EDUCATION_STEPS : SELF_TAUGHT_STEPS;
+  const currentStep = steps[step];
+
+  // The root pre-paint script handles direct loads. Reassert the same existing
+  // data-theme architecture on client navigation, then put the prior DOM state
+  // back when this route unmounts. The stored user preference is never changed.
+  useEffect(() => {
+    const root = document.documentElement;
+    const previousTheme = root.dataset.theme;
+    root.dataset.theme = "dark";
+    return () => {
+      if (previousTheme === undefined) delete root.dataset.theme;
+      else root.dataset.theme = previousTheme;
+    };
+  }, []);
 
   // Supabase is the source of truth for the post-sign-up hand-off. The old
   // local demo session must not decide whether a real account can onboard.
@@ -110,7 +134,9 @@ export default function OnboardingPage() {
           return;
         }
         const handle = profile?.username ?? user.user_metadata?.username ?? user.email?.split("@")[0] ?? "";
-        setMe({ handle, age: typeof profile?.age === "number" ? profile.age : 16 });
+        const profileAge = typeof profile?.age === "number" ? profile.age : 16;
+        setMe({ handle, age: profileAge });
+        setAge(String(profileAge));
         setUsername(handle);
         setInterests(readWelcomeTags()); // interests picked on /welcome carry in
         setChecking(false);
@@ -137,6 +163,19 @@ export default function OnboardingPage() {
     return () => { active = false; window.clearTimeout(timer); };
   }, [username]);
 
+  useEffect(() => {
+    if (currentlyInEducationalInstitution !== true || institution || institutionNotListed || institutionQuery.trim().length < 2) { setInstitutionResults([]); setInstitutionStatus("idle"); return; }
+    let active = true;
+    setInstitutionStatus("loading");
+    const timer = window.setTimeout(() => {
+      fetch(`/api/institutions?q=${encodeURIComponent(institutionQuery.trim())}`)
+        .then(async (response) => { const body = await response.json(); if (!response.ok) throw new Error(body.error); return body.institutions ?? []; })
+        .then((results) => { if (active) { setInstitutionResults(results); setInstitutionStatus("idle"); } })
+        .catch(() => { if (active) setInstitutionStatus("error"); });
+    }, 300);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [institutionQuery, institution, institutionNotListed, currentlyInEducationalInstitution]);
+
   const addCustomTag = () => {
     const tag = draft.trim().replace(/^#/, "").replace(/\s+/g, " ").slice(0, 24);
     if (!tag) return;
@@ -155,21 +194,48 @@ export default function OnboardingPage() {
     setList((cur) => (cur.includes(tag) ? cur.filter((t) => t !== tag) : [...cur, tag]));
   };
 
-  /** Persist everything; skipping fills sensible defaults and still marks onboarded. */
-  async function finalize(skip: boolean) {
+  const chooseNoEducationalInstitution = () => {
+    setCurrentlyInEducationalInstitution(false);
+    setInstitution(null);
+    setInstitutionNotListed(false);
+    setCustomInstitution("");
+    setInstitutionQuery("");
+    setInstitutionResults([]);
+  };
+
+  /** Persist the completed onboarding flow. */
+  async function finalize() {
+    if (requiresEducation && currentlyInEducationalInstitution === null) {
+      setError("Choose whether you are currently in an educational institution.");
+      return;
+    }
+    if (requiresEducation && currentlyInEducationalInstitution && !institution && !(institutionNotListed && customInstitution.trim().length > 1)) {
+      setError("Select your institution, or enter its name if it is not listed.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
+      const supabase = createClient();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session?.access_token) {
+        throw new Error("Your sign-in session has expired. Please sign in again before completing onboarding.");
+      }
       await api("/api/settings", {
         method: "PATCH",
+        headers: { Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
-          // Even on skip, persist whatever the user already answered.
           grade: grade ?? "high",
           username: username.trim().replace(/^@+/, "").toLowerCase(),
           age: ageValid ? ageNum : me?.age ?? 16,
           skills: interests,
-          goals: goals.length ? goals : skip ? ["Find collaborators"] : undefined,
+          goals: goals.length ? goals : undefined,
           discoverySource: source,
+          currentlyInEducationalInstitution: requiresEducation ? currentlyInEducationalInstitution : false,
+          institutionId: requiresEducation && currentlyInEducationalInstitution ? institution?.id ?? null : null,
+          institutionNotListed: requiresEducation && currentlyInEducationalInstitution && institutionNotListed,
+          institutionCustomName: requiresEducation && currentlyInEducationalInstitution && institutionNotListed ? customInstitution.trim() : null,
+          school: requiresEducation && currentlyInEducationalInstitution ? institutionNotListed ? customInstitution.trim() : institution?.name ?? "" : "",
           completeOnboarding: true,
         }),
       });
@@ -183,10 +249,11 @@ export default function OnboardingPage() {
   }
 
   const canNext =
-    (step === 0 && !!grade && ageValid && usernameStatus === "available") ||
-    (step === 1 && interests.length > 0) ||
-    step === 2 ||
-    step === 3;
+    (currentStep === "Stage" && !!grade && ageValid && usernameStatus === "available") ||
+    (currentStep === "Education" && (currentlyInEducationalInstitution === false || (currentlyInEducationalInstitution === true && (!!institution || (institutionNotListed && customInstitution.trim().length > 1))))) ||
+    (currentStep === "Interests" && interests.length > 0) ||
+    currentStep === "Goals" ||
+    currentStep === "Discovery";
 
   if (checking) {
     return (
@@ -212,7 +279,7 @@ export default function OnboardingPage() {
 
           {/* 1. Stage → 2. Interests → 3. Goals → 4. Discovery */}
           <ol className="flex items-center gap-1.5" aria-label="Onboarding progress">
-            {STEPS.map((label, i) => {
+            {steps.map((label, i) => {
               const done = i < step;
               const active = i === step;
               return (
@@ -245,7 +312,7 @@ export default function OnboardingPage() {
                       {label}
                     </span>
                   </button>
-                  {i < STEPS.length - 1 && (
+                  {i < steps.length - 1 && (
                     <span
                       className={`h-px flex-1 transition-colors ${done ? "bg-violet-500/50" : "light:bg-slate-300 dark:bg-zinc-800"}`}
                       aria-hidden="true"
@@ -335,7 +402,41 @@ export default function OnboardingPage() {
               )}
 
               {/* ── STEP 2 · Free-form interests ── */}
-              {step === 1 && (
+              {currentStep === "Education" && (
+                <section className={`${GLASS_CARD} p-7`}>
+                  <h1 className="text-xl font-bold light:text-zinc-950 dark:text-zinc-100">
+                    Are you currently in an educational institution?
+                  </h1>
+
+                  <div className="mt-5 grid gap-2">
+                    <button type="button" onClick={() => setCurrentlyInEducationalInstitution(true)} aria-pressed={currentlyInEducationalInstitution === true} className={OPTION_TILE(currentlyInEducationalInstitution === true)}>
+                      <span className="flex items-center justify-between gap-4"><span className="font-semibold">Yes, I&apos;m in an educational institution</span>{currentlyInEducationalInstitution === true && <Check size={16} className="shrink-0 text-violet-500" />}</span>
+                    </button>
+                    <button type="button" onClick={chooseNoEducationalInstitution} aria-pressed={currentlyInEducationalInstitution === false} className={OPTION_TILE(currentlyInEducationalInstitution === false)}>
+                      <span className="flex items-center justify-between gap-4"><span className="font-semibold">No, I&apos;m not currently in an educational institution</span>{currentlyInEducationalInstitution === false && <Check size={16} className="shrink-0 text-violet-500" />}</span>
+                    </button>
+                  </div>
+
+                  {currentlyInEducationalInstitution === true && <div className="mt-5">
+                    <label htmlFor="institution" className="text-xs font-semibold light:text-zinc-500 dark:text-zinc-500">Which school/educational institution are you in?</label>
+                    {!institutionNotListed ? <div className="relative mt-1.5">
+                      <Search size={16} className="pointer-events-none absolute left-3.5 top-3.5 text-zinc-500" />
+                      <input id="institution" value={institution ? institution.name : institutionQuery} onChange={(e) => { setInstitution(null); setInstitutionQuery(e.target.value); }} placeholder="Search your school or institution..." autoComplete="off" className={`${INPUT} w-full pl-10`} />
+                      {institutionStatus === "loading" && <Loader2 size={15} className="absolute right-3.5 top-3.5 animate-spin text-violet-500" />}
+                      {institution && <p className="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400">Selected: {institution.name}<button type="button" onClick={() => { setInstitution(null); setInstitutionQuery(""); }} className="ml-2 text-violet-600 dark:text-violet-400">Change</button></p>}
+                      {!institution && institutionQuery.trim().length >= 2 && <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-2xl border light:border-slate-300/80 dark:border-zinc-700 light:bg-white dark:bg-zinc-900 shadow-xl">
+                        {institutionResults.map((item) => <button key={item.id} type="button" onClick={() => { setInstitution(item); setInstitutionQuery(item.name); setInstitutionResults([]); }} className="block w-full px-4 py-3 text-left transition hover:light:bg-slate-100 hover:dark:bg-zinc-800"><span className="block text-sm font-semibold light:text-zinc-900 dark:text-zinc-100">{item.name}</span>{(item.city || item.state) && <span className="block text-xs light:text-zinc-500 dark:text-zinc-400">{[item.city, item.state].filter(Boolean).join(", ")}</span>}</button>)}
+                        {institutionStatus === "error" && <p className="px-4 py-3 text-xs text-rose-600 dark:text-rose-400">Couldn&apos;t search institutions. Try again.</p>}
+                        {institutionStatus === "idle" && institutionResults.length === 0 && <p className="px-4 py-3 text-xs light:text-zinc-500 dark:text-zinc-400">No matching institutions found.</p>}
+                        <button type="button" onClick={() => { setInstitution(null); setInstitutionNotListed(true); setInstitutionResults([]); }} className="w-full border-t light:border-slate-200 dark:border-zinc-800 px-4 py-3 text-left text-sm font-semibold text-violet-600 transition hover:light:bg-slate-100 hover:dark:bg-zinc-800 dark:text-violet-400">My school/college isn&apos;t listed here</button>
+                      </div>}
+                    </div> : <div className="mt-1.5"><input value={customInstitution} onChange={(e) => setCustomInstitution(e.target.value)} placeholder="Enter your institution name" maxLength={120} className={`${INPUT} w-full`} /><button type="button" onClick={() => { setInstitutionNotListed(false); setCustomInstitution(""); setInstitutionQuery(""); }} className="mt-2 text-xs font-semibold text-violet-600 dark:text-violet-400">Search again</button></div>}
+                    <p className="mt-1.5 text-xs light:text-zinc-500 dark:text-zinc-500">Choose a verified institution, or let us know if yours is not listed.</p>
+                  </div>}
+                </section>
+              )}
+
+              {currentStep === "Interests" && (
                 <section className={`${GLASS_CARD} p-7`}>
                   <h1 className="text-xl font-bold light:text-zinc-950 dark:text-zinc-100">
                     What are you into?
@@ -394,7 +495,7 @@ export default function OnboardingPage() {
               )}
 
               {/* ── STEP 3 · Multi-select goals ── */}
-              {step === 2 && (
+              {currentStep === "Goals" && (
                 <section className={`${GLASS_CARD} p-7`}>
                   <h1 className="text-xl font-bold light:text-zinc-950 dark:text-zinc-100">
                     What brings you to Motion?
@@ -427,7 +528,7 @@ export default function OnboardingPage() {
               )}
 
               {/* ── STEP 4 · Analytics & discovery ── */}
-              {step === 3 && (
+              {currentStep === "Discovery" && (
                 <section className={`${GLASS_CARD} p-7`}>
                   <h1 className="text-xl font-bold light:text-zinc-950 dark:text-zinc-100">
                     Where did you hear about Motion?
@@ -458,7 +559,7 @@ export default function OnboardingPage() {
           {error && <p className="mt-4 text-sm light:text-rose-600 dark:text-rose-400">{error}</p>}
         </main>
 
-        {/* ── Footer: Back · Skip (discrete) · Next/Finish ────────────────── */}
+        {/* ── Footer: Back · Next/Finish ─────────────────────────────────── */}
         <footer className="mt-8 flex items-center justify-between">
           <button
             onClick={() => setStep((s) => Math.max(0, s - 1))}
@@ -468,23 +569,23 @@ export default function OnboardingPage() {
           </button>
 
           <div className="flex items-center gap-4">
-            {/* Discrete Skip — no pill, no bubble, per spec */}
-            <button
-              onClick={() => finalize(true)}
-              disabled={busy}
-              className="text-xs light:text-zinc-500 dark:text-zinc-500 transition-colors hover:light:text-zinc-300 dark:hover:text-zinc-300 disabled:opacity-40"
-            >
-              Skip
-            </button>
-            {step < 3 ? (
+            {step < steps.length - 1 ? (
               <button
                 onClick={() => {
                   setError(null);
-                  if (step === 0 && (!grade || !ageValid || usernameStatus !== "available")) {
+                  if (currentStep === "Stage" && (!grade || !ageValid || usernameStatus !== "available")) {
                     setError("Choose a stage, enter a valid age, and use an available username.");
                     return;
                   }
-                  if (step === 1 && interests.length === 0) {
+                  if (currentStep === "Education" && currentlyInEducationalInstitution === null) {
+                    setError("Choose whether you are currently in an educational institution.");
+                    return;
+                  }
+                  if (currentStep === "Education" && currentlyInEducationalInstitution && !institution && !(institutionNotListed && customInstitution.trim().length > 1)) {
+                    setError("Select your institution, or enter its name if it is not listed.");
+                    return;
+                  }
+                  if (currentStep === "Interests" && interests.length === 0) {
                     setError("Pick at least one interest.");
                     return;
                   }
@@ -497,7 +598,7 @@ export default function OnboardingPage() {
               </button>
             ) : (
               <button
-                onClick={() => finalize(false)}
+                onClick={finalize}
                 disabled={busy}
                 className="flex items-center gap-2 rounded-xl bg-violet-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-600/25 transition-all hover:bg-violet-700 disabled:opacity-40"
               >

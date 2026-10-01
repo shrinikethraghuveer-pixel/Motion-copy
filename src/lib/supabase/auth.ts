@@ -30,6 +30,10 @@ export interface Profile {
   github_url?: string | null;
   linkedin_url?: string | null;
   tech_stack?: string[];
+  institution_id?: string | null;
+  institution_not_listed?: boolean;
+  institution_custom_name?: string | null;
+  currently_in_educational_institution?: boolean | null;
 }
 
 export interface SessionUser {
@@ -61,6 +65,9 @@ export async function signUpWithEmail(
     email,
     password,
     options: {
+      // Confirmation returns through the session-exchange route, which also
+      // establishes the cookies used by server rendering and onboarding.
+      emailRedirectTo: `${window.location.origin}/auth/callback`,
       data: {
         // Consumed by the on_auth_user_created trigger when it seeds profiles.
         username,
@@ -85,8 +92,9 @@ export async function sendMagicLink(email: string): Promise<AuthResult> {
     email,
     options: {
       emailRedirectTo: `${window.location.origin}/auth/callback`,
-      // Consumed by the profile trigger for brand-new magic-link users.
-      data: { username: email.split("@")[0].replace(/[^a-z0-9_]/gi, "").slice(0, 20) },
+      // Sign-in links must not register unknown emails. Registration is
+      // always an explicit choice in the sign-up flow.
+      shouldCreateUser: false,
     },
   });
   return { error: error ? error.message : null, magicLinkSent: !error };

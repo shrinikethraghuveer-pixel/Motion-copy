@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { CalendarDays, Check, Crown, Loader2, Search, UserMinus, Users, X } from "lucide-react";
 import type { DmGroupDetail } from "@/lib/dm-backends";
-import { addGroupMembers, searchUsers } from "@/lib/dm-backends";
+import { addGroupMembers, leaveGroup, searchUsers } from "@/lib/dm-backends";
 import type { PublicUser } from "@/lib/schema";
 import { Avatar } from "@/components/ui/primitives";
 
@@ -75,8 +75,10 @@ export default function GroupInfoPanel({
     setWorking(true);
     setError(null);
     try {
+      await leaveGroup(group.id);
       onLeave();
-    } finally {
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't leave the group");
       setWorking(false);
     }
   };

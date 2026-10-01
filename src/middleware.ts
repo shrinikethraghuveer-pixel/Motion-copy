@@ -9,10 +9,7 @@ import { NextResponse, type NextRequest } from "next/server";
  */
 const PUBLIC_PREFIXES = ["/api", "/_next", "/favicon"];
 
-/** Legacy demo-auth cookie used by the JSON-store dashboard. */
-const LEGACY_SESSION_COOKIE = "motion_session";
-
-/** Routes that require a Supabase session (or legacy demo cookie). */
+/** Routes that require a Supabase session. */
 const PROTECTED_ROUTES = ["/home", "/settings", "/profile", "/explore", "/notifications", "/chat", "/my-space", "/connect", "/connections", "/onboarding", "/admin"];
 
 export async function middleware(request: NextRequest) {
@@ -41,12 +38,8 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Demo accounts authenticate through the legacy JSON-store cookie.
-  const legacySession = request.cookies.get(LEGACY_SESSION_COOKIE)?.value;
-
   const { pathname } = request.nextUrl;
   const isPublic =
-    pathname === "/" ||
     pathname === "/terms" ||
     pathname === "/privacy" ||
     pathname.startsWith("/login") ||
@@ -57,7 +50,15 @@ export async function middleware(request: NextRequest) {
     (p) => pathname === p || pathname.startsWith(p + "/")
   );
 
-  if (!user && !legacySession && isProtected) {
+  // Root: signed-in users go to the feed, everyone else to the welcome
+  // landing. `/welcome` stays public so this can never loop.
+  if (pathname === "/") {
+    const url = request.nextUrl.clone();
+    url.pathname = user ? "/home" : "/welcome";
+    return NextResponse.redirect(url);
+  }
+
+  if (!user && isProtected) {
     const url = request.nextUrl.clone();
     url.pathname = "/welcome";
     return NextResponse.redirect(url);

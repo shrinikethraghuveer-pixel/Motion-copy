@@ -34,12 +34,15 @@ export async function GET(request: Request) {
     if (!error) {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (!userError && user) {
-        const { data: profile } = await supabase
+        const { data: profile, error: profileError } = await supabase
           .from("profiles")
           .select("onboarding_completed")
           .eq("id", user.id)
           .maybeSingle();
-        const target = profile?.onboarding_completed ? "/home" : "/onboarding";
+        // A transient profile lookup failure must not be treated as an
+        // incomplete account. /home performs the authoritative retry through
+        // the app layout before granting access.
+        const target = profileError || profile?.onboarding_completed ? "/home" : "/onboarding";
         return NextResponse.redirect(`${origin}${target}`);
       }
     }

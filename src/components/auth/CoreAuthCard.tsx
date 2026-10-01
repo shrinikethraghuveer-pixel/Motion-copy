@@ -42,12 +42,14 @@ export default function CoreAuthCard({
   const [fields, setFields] = useState<CoreAuthFields>({ name: "", email: "", handle: "", password: "" });
   const [showPw, setShowPw] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [offerSignup, setOfferSignup] = useState(false);
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
 
   const set = (key: keyof CoreAuthFields) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setFields((f) => ({ ...f, [key]: e.target.value }));
     setErr(null);
+    setOfferSignup(false);
   };
 
   const canSubmit = mode === "signin"
@@ -79,7 +81,18 @@ export default function CoreAuthCard({
         router.refresh();
       } else {
         const result = await signInWithEmail(fields.handle.trim(), fields.password);
-        if (result.error) throw new Error(result.error);
+        if (result.error) {
+          // Password failures remain generic, but an email-based attempt gets
+          // an explicit opt-in route to registration; it never creates an
+          // account from a failed sign-in.
+          const email = fields.handle.trim();
+          if (email.includes("@")) {
+            setErr("We couldn't find an account for that email, or the password is incorrect.");
+            setOfferSignup(true);
+            return;
+          }
+          throw new Error(result.error);
+        }
         router.push("/home");
         router.refresh();
       }
@@ -132,7 +145,10 @@ export default function CoreAuthCard({
             type="button"
             role="tab"
             aria-selected={mode === tab}
-            onClick={() => { setMode(tab); setErr(null); }}
+            onClick={() => {
+              if (tab === "signup" && fields.handle.includes("@") && !fields.email) setFields((f) => ({ ...f, email: f.handle }));
+              setMode(tab); setErr(null); setOfferSignup(false);
+            }}
             className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${mode === tab ? "bg-violet-600 text-white shadow" : "light:text-zinc-600 dark:text-zinc-400 hover:light:text-zinc-900 hover:dark:text-zinc-100"}`}
           >
             {tab === "signin" ? "Sign In" : "Get Started"}
@@ -177,6 +193,11 @@ export default function CoreAuthCard({
       </div>
 
       {err && <div className="mb-4 mt-3 rounded-lg border border-red-800/50 bg-red-950/40 p-3 text-xs font-medium text-red-400">{err}</div>}
+      {offerSignup && mode === "signin" && (
+        <button type="button" onClick={() => { setFields((f) => ({ ...f, email: f.handle })); setMode("signup"); setErr(null); setOfferSignup(false); }} className="mt-3 w-full rounded-xl border border-violet-500/60 px-4 py-3 text-sm font-semibold text-violet-600 transition-colors hover:bg-violet-500/10 dark:text-violet-300">
+          Create an account with this email
+        </button>
+      )}
 
       <button
         type="submit"
@@ -193,7 +214,11 @@ export default function CoreAuthCard({
       </button>
       <p className="mt-3 text-center text-xs light:text-zinc-500 dark:text-zinc-500">
         {mode === "signup" ? "Already have an account? " : "New to Motion? "}
-        <button type="button" onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setErr(null); }} className="font-semibold text-violet-600 dark:text-violet-400 hover:underline">
+        <button type="button" onClick={() => {
+          const nextMode = mode === "signup" ? "signin" : "signup";
+          if (nextMode === "signup" && fields.handle.includes("@") && !fields.email) setFields((f) => ({ ...f, email: f.handle }));
+          setMode(nextMode); setErr(null); setOfferSignup(false);
+        }} className="font-semibold text-violet-600 dark:text-violet-400 hover:underline">
           {mode === "signup" ? "Sign in" : "Get started"}
         </button>
       </p>

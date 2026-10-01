@@ -29,6 +29,12 @@ export interface Profile {
   github_url: string | null;
   linkedin_url: string | null;
   tech_stack: string[];
+  /** Display cache for the selected canonical institution or unlisted name. */
+  school?: string | null;
+  institution_id?: string | null;
+  institution_not_listed?: boolean;
+  institution_custom_name?: string | null;
+  currently_in_educational_institution?: boolean | null;
 }
 
 export interface ProfileInsert {
@@ -51,6 +57,11 @@ export interface ProfileInsert {
   github_url?: string | null;
   linkedin_url?: string | null;
   tech_stack?: string[];
+  school?: string | null;
+  institution_id?: string | null;
+  institution_not_listed?: boolean;
+  institution_custom_name?: string | null;
+  currently_in_educational_institution?: boolean | null;
 }
 
 export type ProfileUpdate = Partial<Omit<ProfileInsert, "id">>;

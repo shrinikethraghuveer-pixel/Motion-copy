@@ -33,7 +33,11 @@ alter table public.profiles
   add column if not exists interests text[] not null default '{}',
   add column if not exists goal text,
   add column if not exists feed_vibe text,
-  add column if not exists onboarding_completed boolean not null default false;
+  add column if not exists onboarding_completed boolean not null default false,
+  add column if not exists currently_in_educational_institution boolean,
+  add column if not exists institution_id text,
+  add column if not exists institution_not_listed boolean not null default false,
+  add column if not exists institution_custom_name text;
 
 -- ====================================================================== posts
 create table if not exists public.posts (
@@ -134,11 +138,10 @@ alter table public.profiles       enable row level security;
 alter table public.posts          enable row level security;
 alter table public.ai_generations enable row level security;
 
--- profiles: world-readable; only the owner can edit their row. ---------------
+-- profiles: owner can edit their row; SELECT policy (profiles_select_visible)
+-- is created below, once can_view_profile() exists.
+
 drop policy if exists "profiles_select_public" on public.profiles;
-create policy "profiles_select_public"
-  on public.profiles for select
-  using (true);
 
 drop policy if exists "profiles_update_own" on public.profiles;
 create policy "profiles_update_own"
@@ -146,11 +149,10 @@ create policy "profiles_update_own"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
--- posts: world-readable feed; owners insert/delete only their own rows. -------
+-- posts: owners insert/delete only their own rows. The SELECT policy
+-- (posts_select_visible) is created below, once can_view_profile() exists.
+
 drop policy if exists "posts_select_public" on public.posts;
-create policy "posts_select_public"
-  on public.posts for select
-  using (true);
 
 drop policy if exists "posts_insert_own" on public.posts;
 create policy "posts_insert_own"
@@ -442,7 +444,24 @@ alter table public.profiles
   add column if not exists school text,
   add column if not exists phone text,
   add column if not exists banner_url text,
-  add column if not exists is_deactivated boolean not null default false;
+  add column if not exists is_deactivated boolean not null default false,
+  add column if not exists deactivated_at timestamptz,
+  add column if not exists deactivation_reason text,
+  add column if not exists deactivation_reason_details text,
+  add column if not exists scheduled_reactivation_at timestamptz;
+
+alter table public.profiles
+  drop constraint if exists profiles_deactivation_reason_details_length,
+  add constraint profiles_deactivation_reason_details_length
+    check (deactivation_reason_details is null or char_length(deactivation_reason_details) <= 1000);
+
+alter table public.profiles
+  drop constraint if exists profiles_deactivation_schedule_state,
+  add constraint profiles_deactivation_schedule_state
+    check (
+      (not is_deactivated and deactivated_at is null and scheduled_reactivation_at is null)
+      or is_deactivated
+    );
 
 create table if not exists public.user_settings (
   user_id uuid primary key references public.profiles(id) on delete cascade,
@@ -496,16 +515,29 @@ create table if not exists public.connections (
 );
 create index if not exists connections_target_status_idx on public.connections(target_id,status);
 
+-- Profile visibility. Mute is deliberately NOT consulted here: muting a user
+-- hides their posts from the viewer's feed (see posts_select_visible) but must
+-- never block or grant profile access.
 create or replace function public.can_view_profile(owner_id uuid, viewer_id uuid)
 returns boolean language sql stable security definer set search_path=public as $$
-  select not exists(select 1 from public.profiles p where p.id=owner_id and p.is_deactivated)
-    and (owner_id=viewer_id
-      or exists(select 1 from public.user_blocks b where b.blocker_id=viewer_id and b.blocked_id=owner_id)
-      or exists(select 1 from public.user_mutes m where m.muter_id=viewer_id and m.muted_id=owner_id)
-      or (not exists(select 1 from public.user_settings s where s.user_id=owner_id and s.is_private)
-        and not exists(select 1 from public.user_blocks b where (b.blocker_id=owner_id and b.blocked_id=viewer_id) or (b.blocker_id=viewer_id and b.blocked_id=owner_id)))
-      or exists(select 1 from public.connections c where c.status='accepted' and ((c.requester_id=owner_id and c.target_id=viewer_id) or (c.requester_id=viewer_id and c.target_id=owner_id))
-        and not exists(select 1 from public.user_blocks b where (b.blocker_id=owner_id and b.blocked_id=viewer_id) or (b.blocker_id=viewer_id and b.blocked_id=owner_id))));
+  select owner_id = viewer_id
+    or (
+      not exists (select 1 from public.profiles p where p.id = owner_id and p.is_deactivated)
+      and not exists (
+        select 1 from public.user_blocks b
+        where (b.blocker_id = owner_id and b.blocked_id = viewer_id)
+           or (b.blocker_id = viewer_id and b.blocked_id = owner_id)
+      )
+      and (
+        not exists (select 1 from public.user_settings s where s.user_id = owner_id and s.is_private)
+        or exists (
+          select 1 from public.connections c
+          where c.status = 'accepted'
+            and ((c.requester_id = owner_id and c.target_id = viewer_id)
+              or (c.requester_id = viewer_id and c.target_id = owner_id))
+        )
+      )
+    );
 $$;
 create or replace function public.delete_my_account()
 returns boolean language plpgsql security definer set search_path=public,auth as $$
@@ -516,6 +548,34 @@ end;
 $$;
 revoke all on function public.delete_my_account() from public;
 grant execute on function public.delete_my_account() to authenticated;
+
+-- Called only by a privileged scheduled job. It is idempotent: once a row is
+-- reactivated it no longer meets the where clause.
+create or replace function public.reactivate_due_accounts()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  changed integer;
+begin
+  update public.profiles
+  set is_deactivated = false,
+      deactivated_at = null,
+      scheduled_reactivation_at = null
+  where is_deactivated = true
+    and scheduled_reactivation_at is not null
+    and scheduled_reactivation_at <= now();
+  get diagnostics changed = row_count;
+  return changed;
+end;
+$$;
+
+revoke all on function public.reactivate_due_accounts() from public;
+revoke all on function public.reactivate_due_accounts() from anon;
+revoke all on function public.reactivate_due_accounts() from authenticated;
+grant execute on function public.reactivate_due_accounts() to service_role;
 
 alter table public.user_settings enable row level security;
 alter table public.user_blocks enable row level security;

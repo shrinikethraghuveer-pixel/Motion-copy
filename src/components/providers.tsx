@@ -71,9 +71,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      const r = await api<{ user: PublicUser | null; devFallback?: boolean }>("/api/session");
+      const r = await api<{ user: PublicUser | null }>("/api/account");
       setMe(r.user);
-      setDevFallbackSession(Boolean(r.devFallback));
+      setDevFallbackSession(false);
     } catch {
       setMe(null);
     } finally {
@@ -107,8 +107,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, [refresh, refreshUnread, refreshChats]);
 
   const signOut = useCallback(async () => {
-    try { await signOutSupabase(); } catch { /* local Motion accounts may not have a Supabase session */ }
-    try { await api("/api/session", { method: "DELETE" }); } catch { /* continue with the client-side sign-out */ } finally {
+    try { await signOutSupabase(); } finally {
       setMe(null);
       window.location.assign("/welcome");
     }

@@ -5,14 +5,37 @@ import { clearSession, getSessionToken, newId } from "@/lib/session";
 import { hashPassword, verifyPassword } from "@/lib/auth";
 import { DEFAULT_SETTINGS, GOAL_OPTIONS_MULTI, type Audience, type DB, type Goal, type ThemePref, type TextSize, type DisplayFont } from "@/lib/schema";
 import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
+import { createClient as createSupabaseClient, type SupabaseClient, type User as SupabaseUser } from "@supabase/supabase-js";
+import { getSupabaseAuth } from "@/lib/supabase/server-auth";
 
-async function persistSupabaseSettings(body: Record<string, unknown>, settings: ReturnType<typeof withSettings>) {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) return null;
+type SupabaseRequestAuth = { client: SupabaseClient; user: SupabaseUser };
+
+/** Verify the browser's Supabase token for sensitive writes independently of
+ * the legacy JSON-store session. The client retains this token only in memory
+ * long enough to make the authenticated request. */
+async function getSupabaseRequestAuth(req: NextRequest): Promise<SupabaseRequestAuth | null> {
+  const token = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!token || !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) return null;
+  const client = createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+  const { data: { user }, error } = await client.auth.getUser(token);
+  return error || !user ? null : { client, user };
+}
+
+async function persistSupabaseSettings(body: Record<string, unknown>, settings: ReturnType<typeof withSettings>, requestAuth?: SupabaseRequestAuth) {
+  const completingOnboarding = body.completeOnboarding === true;
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    return completingOnboarding ? "Supabase is not configured." : null;
+  }
   try {
-    const supabase = await createSupabaseServerClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) return null; // local/demo sessions do not have a Supabase identity
-    const completingOnboarding = body.completeOnboarding === true;
+    const supabase = requestAuth?.client ?? await createSupabaseServerClient();
+    const { data: { user }, error: authError } = requestAuth
+      ? { data: { user: requestAuth.user }, error: null }
+      : await supabase.auth.getUser();
+    if (authError || !user) {
+      return completingOnboarding ? "Your Supabase session is unavailable. Please sign in again." : null;
+    }
     const profilePatch: Record<string, unknown> = {};
     if (completingOnboarding) {
       // Onboarding writes only the profile identity and completion fields.
@@ -20,6 +43,14 @@ async function persistSupabaseSettings(body: Record<string, unknown>, settings: 
       // intentionally use a minimal profiles schema.
       if (typeof body.username === "string") profilePatch.username = body.username;
       if (typeof body.age === "number") profilePatch.age = body.age;
+      if (Array.isArray(body.skills) && body.skills.every((skill) => typeof skill === "string")) profilePatch.interests = body.skills;
+      if (Array.isArray(body.goals) && typeof body.goals[0] === "string") profilePatch.goal = body.goals[0];
+      if (typeof body.discoverySource === "string") profilePatch.feed_vibe = body.discoverySource;
+      if (typeof body.school === "string") profilePatch.school = body.school;
+      if (typeof body.institutionId === "string" || body.institutionId === null) profilePatch.institution_id = body.institutionId;
+      if (typeof body.institutionNotListed === "boolean") profilePatch.institution_not_listed = body.institutionNotListed;
+      if (typeof body.institutionCustomName === "string" || body.institutionCustomName === null) profilePatch.institution_custom_name = body.institutionCustomName;
+      if (typeof body.currentlyInEducationalInstitution === "boolean") profilePatch.currently_in_educational_institution = body.currentlyInEducationalInstitution;
       profilePatch.onboarding_completed = true;
     } else {
       for (const [source, target] of [["username","username"],["name","display_name"],["bio","bio"],["school","school"],["phone","phone"],["avatarUrl","avatar_url"]]) {
@@ -31,12 +62,22 @@ async function persistSupabaseSettings(body: Record<string, unknown>, settings: 
       }
     }
     if (Object.keys(profilePatch).length) {
-      const query = completingOnboarding
-        ? supabase.from("profiles").upsert({ id: user.id, ...profilePatch }, { onConflict: "id" })
-        : supabase.from("profiles").update(profilePatch).eq("id", user.id);
-      const { error } = await query;
+      const query = supabase
+        .from("profiles")
+        .update(profilePatch)
+        .eq("id", user.id)
+        .select("id")
+        .maybeSingle();
+      const { data, error } = await query;
       if (error) return error.message;
+      if (completingOnboarding && !data) {
+        return "Your profile could not be updated. Please sign in again and retry.";
+      }
     }
+    // Onboarding completion depends only on the authenticated profile row.
+    // Settings are initialized lazily, so a missing optional settings table
+    // cannot turn a completed profile update into a failed submission.
+    if (completingOnboarding) return null;
     const row: Record<string, unknown> = {user_id:user.id,updated_at:new Date().toISOString()};
     for (const [source,target] of [["privateProfile","is_private"],["lowSpecMode","low_spec_mode"],["aiPostSharpening","ai_post_sharpening"],["aiSmartRanking","ai_smart_ranking"],["aiDefaultModel","ai_default_model"],["accentColor","accent_color"],["theme","theme_mode"]]) {
       if (source in body) row[target]=body[source];
@@ -197,7 +238,14 @@ function publicProfileOf(u: DB["users"][number]) {
 
 /* ---------- GET /api/settings — everything the page needs in one call ---------- */
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Group A account/settings reads always prefer the verified Supabase user;
+  // an old motion_session cookie must not select a different account.
+  const supabaseAuth = await getSupabaseAuth(req);
+  if (supabaseAuth) {
+    const payload = await getSupabaseSettingsPayload();
+    return payload ? json(payload) : bad("Your Motion profile is unavailable.", 409);
+  }
   const auth = await requireUser();
   if ("res" in auth) {
     try { const payload=await getSupabaseSettingsPayload(); return payload?json(payload):auth.res; }
@@ -266,8 +314,33 @@ export async function GET() {
 /* ---------- PATCH /api/settings — one endpoint, sectioned payloads ---------- */
 
 export async function PATCH(req: NextRequest) {
-  const auth = await requireUser();
   const body = await readBody<Record<string, unknown>>(req);
+  // Completion is exclusively a Supabase-authenticated operation. This must
+  // happen before consulting the legacy session, otherwise a real browser
+  // session can be rejected by an unrelated JSON-store guard.
+  if (body.completeOnboarding === true) {
+    const requestAuth = await getSupabaseRequestAuth(req);
+    if (!requestAuth) return bad("Sign in to complete onboarding.", 401);
+    const validation = validateSupabaseSettingsBody(body);
+    if (validation) return bad(validation);
+    const error = await persistSupabaseSettings(body, DEFAULT_SETTINGS, requestAuth);
+    if (error) return bad(`Supabase settings update failed: ${error}`, 502);
+    return json({ ok: true });
+  }
+  // Settings and profile preferences are Group A data. Keep the existing
+  // legacy branch only for unconverted demo endpoints, never for a verified
+  // Supabase account.
+  const supabaseAuth = await getSupabaseAuth(req);
+  if (supabaseAuth) {
+    const validation = validateSupabaseSettingsBody(body);
+    if (validation) return bad(validation);
+    const payload = await getSupabaseSettingsPayload();
+    if (!payload) return bad("Your Motion profile is unavailable.", 409);
+    const error = await persistSupabaseSettings(body, payload.settings);
+    if (error) return bad(`Supabase settings update failed: ${error}`, 502);
+    return json({ ok: true, settings: payload.settings, profile: payload.profile });
+  }
+  const auth = await requireUser();
   if ("res" in auth) {
     const validation=validateSupabaseSettingsBody(body);
     if(validation)return bad(validation);

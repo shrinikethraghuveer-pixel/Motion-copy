@@ -15,10 +15,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning className={`${inter.variable} ${space.variable}`}>
       <head>
-        {/* Set the stored theme before first paint to avoid a light flash. */}
+        {/* Set the stored theme before first paint to avoid a light flash. Onboarding
+            is intentionally always dark, without changing the saved preference. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("motion-theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t);}}catch(e){}})();`,
+            __html: `(function(){try{var t=location.pathname==="/onboarding"?"dark":localStorage.getItem("motion-theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t);}}catch(e){}})();`,
           }}
         />
       </head>

@@ -234,6 +234,8 @@ export interface EventMeta {
   category?: string;
   attendeeIds?: string[];
   posterUrl?: string | null;
+  /** Optional join/RSVP link surfaced on the event card. */
+  link?: string;
 }
 
 export interface PollOption {
@@ -331,7 +333,13 @@ export interface GroupDiscussionPost {
   text: string;
   createdAt: string;
   pinned: boolean;
+  /** Visibility chosen in the community composer; the post remains bound to this group. */
+  audience?: "Everyone" | "Community Only" | "Members Only";
   replies: GroupReply[];
+  /** Composer parity with the global feed — optional rich content. */
+  mediaUrls?: string[] | null;
+  poll?: PollMeta | null;
+  event?: EventMeta | null;
 }
 
 export interface Group {

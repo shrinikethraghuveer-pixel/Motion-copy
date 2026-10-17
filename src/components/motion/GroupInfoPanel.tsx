@@ -9,19 +9,17 @@ import { Avatar } from "@/components/ui/primitives";
 
 /**
  * Group Info / Settings panel — details, roster with Admin badges,
- * Add Members search, and Leave Group. Rendered in place of the message
- * stream (or as a slide-over) when the chat header is clicked.
+ * Add Members search (admins only — enforced server-side too), and
+ * Leave Group. Rendered in place of the message stream when the chat
+ * header is clicked.
  */
 export default function GroupInfoPanel({
   group,
-  isCreator,
   onClose,
   onChanged,
   onLeave,
 }: {
   group: DmGroupDetail;
-  /** Creator row gets the Crown badge; only the creator sees admin tools today. */
-  isCreator: boolean;
   onClose: () => void;
   /** Called after members were added so the page can refresh the roster. */
   onChanged: () => void;
@@ -50,6 +48,9 @@ export default function GroupInfoPanel({
     return () => window.clearTimeout(t);
   }, [query]);
 
+  // UI gate only — the database INSERT policy is the real authorization;
+  // the button is hidden from non-admins to avoid inviting RLS errors.
+  const isAdmin = group.meRole === "admin";
   const memberIds = new Set(group.members.map((m) => m.user.id));
 
   const addPicked = async () => {
@@ -136,8 +137,8 @@ export default function GroupInfoPanel({
         ))}
       </div>
 
-      {/* Add members */}
-      {adding ? (
+      {/* Add members — admins only (server-side policy still enforces) */}
+      {isAdmin && (adding ? (
         <div className="mt-4 rounded-xl border border-zinc-200 bg-white/50 p-3 dark:border-zinc-800 dark:bg-zinc-800/40">
           <label className="relative block">
             <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -190,7 +191,7 @@ export default function GroupInfoPanel({
         >
           <UserPlusIcon /> Add Members
         </button>
-      )}
+      ))}
 
       {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
 

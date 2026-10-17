@@ -290,30 +290,18 @@ export async function createGroup(input: CreateGroupInput): Promise<string> {
   if (hasSupabaseEnv()) {
     try {
       const sb = await sbClient();
-      const myId = await currentUserId(sb);
-      if (!myId) throw new Error("Sign in to create a group.");
-
-      const { data: chat, error: cErr } = await sb
-        .from("group_chats")
-        .insert({
-          name: input.name,
-          description: input.description || null,
-          avatar_url: input.avatarUrl,
-          created_by: myId,
-        })
-        .select("id")
-        .single();
-      if (cErr) throw new Error(cErr.message);
-      const groupId = (chat as { id: string }).id;
-
-      const { error: mErr } = await sb.from("group_members").insert([
-        { group_id: groupId, user_id: myId, role: "admin" },
-        ...input.memberIds.filter((id) => id !== myId).map((user_id) => ({ group_id: groupId, user_id, role: "member" as const })),
-      ]);
-      if (mErr) throw new Error(mErr.message);
-      return groupId;
+      const { data, error } = await sb.rpc("create_group_chat_with_members", {
+        p_name: input.name,
+        p_description: input.description || null,
+        p_avatar_url: input.avatarUrl,
+        p_member_ids: input.memberIds,
+      });
+      if (error) throw new Error(error.message);
+      if (typeof data !== "string" || !data) throw new Error("Group creation returned no group ID.");
+      return data;
     } catch (e) {
-      console.warn("[dm] Supabase create group failed — falling back:", e instanceof Error ? e.message : e);
+      console.warn("[dm] Supabase create group failed:", e instanceof Error ? e.message : e);
+      throw e;
     }
   }
 
@@ -328,16 +316,15 @@ export async function createGroup(input: CreateGroupInput): Promise<string> {
 
 export async function sendGroupMessage(groupId: string, text: string): Promise<void> {
   if (hasSupabaseEnv()) {
-    try {
-      const sb = await sbClient();
-      const myId = await currentUserId(sb);
-      if (!myId) throw new Error("Sign in to send messages.");
-      const { error } = await sb.from("messages").insert({ sender_id: myId, group_id: groupId, content: text });
-      if (error) throw new Error(error.message);
-      return;
-    } catch (e) {
-      console.warn("[dm] Supabase group send failed — falling back:", e instanceof Error ? e.message : e);
-    }
+    // No legacy JSON fallback in Supabase mode: a failed send (RLS, network,
+    // DB) must surface to the user instead of silently landing in the JSON
+    // store where Supabase group members will never see it.
+    const sb = await sbClient();
+    const myId = await currentUserId(sb);
+    if (!myId) throw new Error("Sign in to send messages.");
+    const { error } = await sb.from("messages").insert({ sender_id: myId, group_id: groupId, content: text });
+    if (error) throw new Error(error.message);
+    return;
   }
   await post("/api/group-chats", { action: "send", groupId, text });
 }
@@ -357,7 +344,8 @@ export async function addGroupMembers(groupId: string, memberIds: string[]): Pro
       if (error) throw new Error(error.message);
       return fresh.length;
     } catch (e) {
-      console.warn("[dm] Supabase add members failed — falling back:", e instanceof Error ? e.message : e);
+      console.warn("[dm] Supabase add members failed:", e instanceof Error ? e.message : e);
+      throw e;
     }
   }
   const r = await post<{ ok: boolean; added: number }>("/api/group-chats", { action: "addMembers", groupId, memberIds });
@@ -366,16 +354,16 @@ export async function addGroupMembers(groupId: string, memberIds: string[]): Pro
 
 export async function leaveGroup(groupId: string): Promise<void> {
   if (hasSupabaseEnv()) {
-    try {
-      const sb = await sbClient();
-      const myId = await currentUserId(sb);
-      if (!myId) throw new Error("Sign in first.");
-      const { error } = await sb.from("group_members").delete().eq("group_id", groupId).eq("user_id", myId);
-      if (error) throw new Error(error.message);
-      return;
-    } catch (e) {
-      console.warn("[dm] Supabase leave group failed — falling back:", e instanceof Error ? e.message : e);
-    }
+    // No legacy JSON fallback in Supabase mode: a failed leave (RLS, network,
+    // DB, final-admin rule) must surface instead of "leaving" only the JSON
+    // store while the user remains on the real Supabase roster. No DELETE
+    // policy or leave behavior is decided here.
+    const sb = await sbClient();
+    const myId = await currentUserId(sb);
+    if (!myId) throw new Error("Sign in first.");
+    const { error } = await sb.from("group_members").delete().eq("group_id", groupId).eq("user_id", myId);
+    if (error) throw new Error(error.message);
+    return;
   }
   await post("/api/group-chats", { action: "leave", groupId });
 }

@@ -16,3 +16,22 @@ coverage/
 # Editor and operating system files
 .DS_Store
 Thumbs.db
+
+
+# Local logs and development data
+.freebuff/dev.log
+data/db.json
+
+# Downloaded college datasets (local only)
+College-ALL COLLEGE.xlsx
+UDISE_Bengaluru_North.zip
+UDISE_Bengaluru_North/
+UDISE_Bengaluru_South.zip
+UDISE_Bengaluru_South/
+bengaluru_aishe_colleges_cleaned.csv
+bengaluru_kys_grade6_12_branch_aware.csv
+bengaluru_north_north*.json
+bengaluru_south_*.json
+india-colleges-and-cities.zip
+india-colleges-and-cities/
+data/institutions/

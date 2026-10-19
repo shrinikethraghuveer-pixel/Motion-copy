@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { headers } from "next/headers";
-import { readDB, writeDB, serialize } from "@/lib/db";
+import { DataStoreUnavailableError, readDB, writeDB, serialize } from "@/lib/db";
 import { clearSession, describeDevice, getSessionToken, getSessionUserId, newId, setSession } from "@/lib/session";
 import { ageTagOf, type PublicUser, type User } from "@/lib/schema";
 import { withSettings } from "@/lib/server";
 import { DEMO_PASSWORD } from "@/lib/seed";
 import { hashPassword, verifyPassword } from "@/lib/auth";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 function publicUser(u: User, selfId: string | null, db: { connections: { requesterId: string; targetId: string; status: string }[] }): PublicUser {
   let connectionState: PublicUser["connectionState"] = "none";
@@ -26,17 +27,28 @@ function publicUser(u: User, selfId: string | null, db: { connections: { request
 }
 
 export async function GET() {
-  const db = await readDB();
+  const isProduction = process.env.NODE_ENV === "production";
+  let db;
+  try {
+    db = await readDB();
+  } catch (error) {
+    if (error instanceof DataStoreUnavailableError) {
+      return NextResponse.json({ error: "Local data store unavailable. Run `npm run seed:db` to initialize it." }, { status: 503 });
+    }
+    throw error;
+  }
   const { getSessionUserId } = await import("@/lib/session");
   const selfId = await getSessionUserId();
   const me = selfId ? db.users.find((u) => u.id === selfId) ?? null : null;
   // Dev convenience: APIs resolve a seeded user even with no session cookie.
   // Surface that so /welcome can tell "really signed in" from "dev fallback".
   const hasSessionCookie = Boolean(await getSessionToken());
+  // Audit P0-1: built-in demo handles are a local/dev convenience — never
+  // exposed in a production deployment (empty list); real sessions still resolve.
   return NextResponse.json({
     user: me ? publicUser(me, selfId, db) : null,
-    demoHandles: db.users.slice(0, 6).map((u) => ({ handle: u.handle, name: u.name })),
-    devFallback: !hasSessionCookie && process.env.NODE_ENV === "development",
+    demoHandles: isProduction ? [] : db.users.slice(0, 6).map((u) => ({ handle: u.handle, name: u.name })),
+    devFallback: !isProduction && !hasSessionCookie && process.env.NODE_ENV === "development",
   });
 }
 
@@ -53,6 +65,22 @@ export async function POST(req: NextRequest) {
     goals?: string[];
     discoverySource?: string;
   };
+  // Audit P0-1: the demo quick-login (password "demo" for any seeded account)
+  // is a local/dev convenience — hard-disabled in production, before any data
+  // store or limiter access.
+  if (body.mode === "demo" && process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "Demo login is disabled in production." }, { status: 403 });
+  }
+  // Audit P4: credential endpoints. Two buckets — per attempted handle
+  // (protects a single victim account from targeted brute force) and one
+  // shared-IP bucket (rate-limit.ts resolves the trusted platform signal; on
+  // hosts without one this collapses to a deployment-wide limit, which is the
+  // documented fail-closed tradeoff).
+  const attemptKey = (body.handle ?? "").trim().replace(/^@+/, "").toLowerCase();
+  const attemptRate = await rateLimit(req, "login-attempt", attemptKey || "anon", 8, 300);
+  if (!attemptRate.allowed) return rateLimitResponse(attemptRate.retryAfter);
+  const ipRate = await rateLimit(req, "login-ip", "anon", 30, 300);
+  if (!ipRate.allowed) return rateLimitResponse(ipRate.retryAfter);
   const db = await readDB();
   const ua = (await headers()).get("user-agent") ?? "";
   const logLogin = async (userId: string) => {
@@ -153,7 +181,10 @@ export async function POST(req: NextRequest) {
     following: [],
     createdAt: new Date().toISOString(),
   };
-  if (body.email?.trim()) user.email = body.email.trim();
+  // Audit P0-3: emails are never accepted from the client for a legacy
+  // account — they are display data that must not feed admin authorization
+  // (which keys on MOTION_ADMIN_EMAILS). Admin emails are installed by the
+  // operator editing the store directly.
   if (body.password) user.passwordHash = hashPassword(body.password);
   db.users.push(user);
   await logLogin(user.id);

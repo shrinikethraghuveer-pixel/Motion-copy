@@ -7,15 +7,16 @@ import AdminModerationQueue from "@/components/admin/AdminModerationQueue";
 export const dynamic = "force-dynamic";
 
 export default async function AdminPage() {
+  // Audit P0-3: parity with the API gate. Supabase-configured deployments
+  // authorize admins ONLY from the verified Supabase identity; when Supabase
+  // is not configured, operator-managed legacy admins remain supported. This
+  // page is a convenience gate — the API is the security boundary.
   let allowed = false;
-  let hasSupabaseIdentity = false;
   if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
     const supabase = await createSupabaseServerClient();
     const { data: { user } } = await supabase.auth.getUser();
-    hasSupabaseIdentity = Boolean(user);
     allowed = isAdminEmail(user?.email);
-  }
-  if (!allowed && !hasSupabaseIdentity) {
+  } else {
     const legacyUser = await getCurrentUser();
     allowed = isAdminEmail(legacyUser?.email);
   }

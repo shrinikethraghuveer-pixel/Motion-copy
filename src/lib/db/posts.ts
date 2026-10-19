@@ -1,6 +1,7 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/client";
+import { validateOptionalUrl } from "@/lib/url-validation";
 import type { Profile } from "@/lib/supabase/auth";
 
 /** A feed post with its author's public profile joined in. */
@@ -33,6 +34,10 @@ export async function createPost(
   content: string,
   mediaUrl?: string
 ): Promise<FeedPost> {
+  // P2 residual: mirror the API route's URL rules — the browser plane can
+  // write posts directly through RLS, so validation must run here too.
+  const media = validateOptionalUrl(mediaUrl);
+  if (!media.ok) throw new Error(media.reason);
   const supabase = createClient();
   const {
     data: { user },
@@ -44,7 +49,7 @@ export async function createPost(
     .insert({
       user_id: user.id,
       content: content.trim(),
-      media_url: mediaUrl ?? null,
+      media_url: media.url,
     })
     .select(
       "id, content, media_url, likes_count, reposts_count, replies_count, created_at, profiles:user_id (id, username, full_name, avatar_url)"

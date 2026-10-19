@@ -3,6 +3,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { api, post as apiPost, type FeedPost, type ProfilePayload } from "@/lib/client";
+import { validateExternalLink, validateOptionalUrl } from "@/lib/url-validation";
 import type {
   FollowState,
   ProfilePageData,
@@ -246,8 +247,8 @@ function mapLegacyPost(p: FeedPost): ProfilePostRow {
     content: p.text,
     media_url: null,
     media: p.media ? { seed: p.media.seed, label: p.media.label } : null,
-    likes_count: p.likes.length,
-    reposts_count: p.reposts.length,
+    likes_count: p.likesCount,
+    reposts_count: p.repostsCount,
     replies_count: p.comments.length,
     created_at: p.createdAt,
     liked_by_me: p.likedByMe,
@@ -284,6 +285,23 @@ export interface ProfileUpdatePatch {
  * running on the legacy store (the caller keeps its optimistic state).
  */
 export async function updateOwnProfile(patch: ProfileUpdatePatch): Promise<ProfileRow | null> {
+  // P2: mirrored URL validation — the browser plane can write profiles
+  // directly through RLS in Supabase mode, so the same URL rules apply here
+  // as on the /api/settings route (legacy mode).
+  if (patch.avatar_url !== undefined) {
+    const avatar = validateOptionalUrl(patch.avatar_url);
+    if (!avatar.ok) throw new Error(avatar.reason);
+  }
+  if (patch.banner_url !== undefined || patch.cover_url !== undefined) {
+    const banner = validateOptionalUrl(patch.banner_url ?? patch.cover_url);
+    if (!banner.ok) throw new Error(banner.reason);
+  }
+  for (const linkKey of ["website_url", "github_url", "linkedin_url"] as const) {
+    if (patch[linkKey] !== undefined) {
+      const link = validateExternalLink(patch[linkKey]);
+      if (!link.ok) throw new Error(link.reason);
+    }
+  }
   if (hasSupabaseEnv()) {
     try {
       const supabase = createClient();
@@ -377,6 +395,24 @@ export async function toggleFollow(
   return null;
 }
 
+/**
+ * Identity-free like count for one post (0016 companion). Prefers the
+ * `post_like_counts` SECURITY DEFINER RPC when it exists (required once the
+ * owner-only post_likes policy is applied, because head-counts over restricted
+ * rows degenerate to the viewer's own row); falls back to the legacy head
+ * count when the RPC is not deployed yet, so pre- and post-migration behavior
+ * are both correct.
+ */
+async function postLikeCount(supabase: SupabaseClient, postId: string): Promise<number | null> {
+  const { data, error } = await supabase.rpc("post_like_counts", { p_post_ids: [postId] });
+  if (!error && Array.isArray(data)) {
+    const row = (data as Array<{ post_id: string; like_count: number | string }>).find((entry) => entry.post_id === postId);
+    return row ? Number(row.like_count) : 0;
+  }
+  const { count } = await supabase.from("post_likes").select("*", { count: "exact", head: true }).eq("post_id", postId);
+  return count;
+}
+
 /** Like / unlike a post. Returns the updated row for optimistic rendering. */
 export async function togglePostLike(post: ProfilePostRow): Promise<ProfilePostRow> {
   if (hasSupabaseEnv()) {
@@ -390,7 +426,7 @@ export async function togglePostLike(post: ProfilePostRow): Promise<ProfilePostR
         const { error } = await supabase.from("post_likes").insert({ post_id: post.id });
         if (error && error.code !== "23505") throw new Error(error.message);
       }
-      const { count } = await supabase.from("post_likes").select("*", { count: "exact", head: true }).eq("post_id", post.id);
+      const count = await postLikeCount(supabase, post.id);
       return { ...post, likes_count: count ?? post.likes_count, liked_by_me: !post.liked_by_me };
     } catch (e) {
       console.warn("[profile] Supabase like failed — using posts API:", e instanceof Error ? e.message : e);

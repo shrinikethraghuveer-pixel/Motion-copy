@@ -253,6 +253,44 @@ export interface PollMeta {
   totalVotes: number;
 }
 
+/**
+ * Viewer-facing poll data (audit P7): raw voter IDs are never serialized to
+ * clients. Options expose per-option counts, the viewer's own selections and
+ * the poll-level "already voted" flag instead.
+ */
+export interface HydratedPollOption {
+  id: string;
+  text: string;
+  voteCount: number;
+  myVote: boolean;
+}
+
+export interface HydratedPollMeta {
+  question: string;
+  options: HydratedPollOption[];
+  duration: string;
+  multipleChoice: boolean;
+  hideResults: boolean;
+  totalVotes: number;
+  hasVoted: boolean;
+}
+
+/** Viewer-facing event data: attendee identities reduced to a count + self flag. */
+export interface HydratedEventMeta {
+  title: string;
+  date: string;
+  location: string;
+  kind: EventKind;
+  endTime?: string;
+  durationMinutes?: number;
+  capacity?: number | null;
+  category?: string;
+  posterUrl?: string | null;
+  link?: string;
+  attendeeCount: number;
+  rsvpdByMe: boolean;
+}
+
 export interface PostMedia {
   kind: "art";
   seed: string;
@@ -393,6 +431,13 @@ export interface DB {
 
 /* ---------- API payload shapes ---------- */
 
+/**
+ * PublicUser settings: a full UserSettings-shaped object is returned so
+ * existing callers type-check, but for users other than the viewer the server
+ * (server.ts publicSettings) substitutes DISPLAY-SAFE defaults — the real
+ * block/mute lists, messaging/mention policy, notification prefs and passkey
+ * descriptors never leave the server for another user (audit N1).
+ */
 export interface PublicUser extends User {
   ageTag: AgeTag;
   isSelf: boolean;
@@ -400,8 +445,17 @@ export interface PublicUser extends User {
   settings: UserSettings;
 }
 
-export interface FeedPost extends Post {
+/**
+ * Viewer-facing post (audit P7): interaction lists (likes/reposts/saved/poll
+ * votes/attendees) never cross the API boundary as user-ID arrays.
+ */
+export interface FeedPost
+  extends Omit<Post, "likes" | "reposts" | "savedBy" | "poll" | "event"> {
   author: PublicUser;
+  poll: HydratedPollMeta | null;
+  event: HydratedEventMeta | null;
+  likesCount: number;
+  repostsCount: number;
   likedByMe: boolean;
   repostedByMe: boolean;
   savedByMe: boolean;

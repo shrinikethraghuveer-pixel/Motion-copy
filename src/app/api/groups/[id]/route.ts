@@ -1,10 +1,63 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bad, json, persist, readBody, requireUser, toPublicUser } from "@/lib/server";
-import type { EventMeta, PollMeta } from "@/lib/schema";
+import type { EventMeta, GroupDiscussionPost, PollMeta } from "@/lib/schema";
+import type { DB, User } from "@/lib/schema";
 import { newId } from "@/lib/session";
 import { screenUserText } from "@/lib/moderation";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { validateMediaUrlList, validateOptionalUrl } from "@/lib/url-validation";
 
 type Params = { params: Promise<{ id: string }> };
+
+/** Community discussion post with viewer-safe interaction data (audit P7). */
+function redactGroupPostForViewer(post: GroupDiscussionPost, db: DB, meId: string) {
+  const hydrateUser = (userId: string) => {
+    const user = db.users.find((entry) => entry.id === userId);
+    return user ? toPublicUser(db, user, meId) : null;
+  };
+  const author = hydrateUser(post.authorId);
+  if (!author) return null;
+  return {
+    ...post,
+    poll: post.poll
+      ? {
+          question: post.poll.question,
+          duration: post.poll.duration,
+          multipleChoice: post.poll.multipleChoice,
+          hideResults: post.poll.hideResults,
+          totalVotes: post.poll.totalVotes,
+          hasVoted: post.poll.options.some((option) => option.votes.includes(meId)),
+          options: post.poll.options.map((option) => ({
+            id: option.id,
+            text: option.text,
+            voteCount: option.votes.length,
+            myVote: option.votes.includes(meId),
+          })),
+        }
+      : null,
+    event: post.event
+      ? {
+          title: post.event.title,
+          date: post.event.date,
+          location: post.event.location,
+          kind: post.event.kind,
+          endTime: post.event.endTime,
+          durationMinutes: post.event.durationMinutes,
+          capacity: post.event.capacity,
+          category: post.event.category,
+          posterUrl: post.event.posterUrl,
+          link: post.event.link,
+          attendeeCount: (post.event.attendeeIds ?? []).length,
+          rsvpdByMe: (post.event.attendeeIds ?? []).includes(meId),
+        }
+      : null,
+    author,
+    replies: post.replies.map((reply) => ({
+      ...reply,
+      author: hydrateUser(reply.authorId),
+    })).filter((reply) => reply.author),
+  };
+}
 
 export async function GET(_req: NextRequest, { params }: Params) {
   const auth = await requireUser();
@@ -16,6 +69,11 @@ export async function GET(_req: NextRequest, { params }: Params) {
   const mine = group.members.find((member) => member.userId === me.id);
   const canView = group.visibility !== "private" || Boolean(mine);
   const canManage = mine?.role === "admin" || mine?.role === "moderator";
+  // Audit 3C: enforce the composer's per-post audience. Members see every
+  // post; non-member viewers of public communities only see posts explicitly
+  // marked "Everyone". Posts that predate the composer have no audience value
+  // and keep their historical community-page visibility.
+  const viewerPosts = (group.posts ?? []).filter((post) => Boolean(mine) || !post.audience || post.audience === "Everyone");
   return json({
     community: {
       id: group.id, name: group.name, tag: group.tag, tags: group.tags ?? [group.tag], description: group.description,
@@ -30,14 +88,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
         const user = db.users.find((entry) => entry.id === request.userId);
         return user ? { ...toPublicUser(db, user, me.id), requestedAt: request.requestedAt } : null;
       }).filter(Boolean) : [],
-      posts: canView ? (group.posts ?? []).map((post) => ({
-        ...post,
-        author: (() => { const user = db.users.find((entry) => entry.id === post.authorId); return user ? toPublicUser(db, user, me.id) : null; })(),
-        replies: post.replies.map((reply) => ({
-          ...reply,
-          author: (() => { const user = db.users.find((entry) => entry.id === reply.authorId); return user ? toPublicUser(db, user, me.id) : null; })(),
-        })).filter((reply) => reply.author),
-      })).sort((a, b) => Number(b.pinned) - Number(a.pinned) || +new Date(b.createdAt) - +new Date(a.createdAt)) : [],
+      posts: canView ? viewerPosts.map((post) => redactGroupPostForViewer(post, db, me.id)).filter((post) => post !== null)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || +new Date(b.createdAt) - +new Date(a.createdAt)) : [],
     },
   });
 }
@@ -46,6 +98,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
+  // Audit P4: community post/reply/rsvp/vote/role writes were unthrottled.
+  const rate = await rateLimit(req, "community-action", me.id, 20, 60);
+  if (!rate.allowed) return rateLimitResponse(rate.retryAfter);
   const { id } = await params;
   const group = db.groups.find((entry) => entry.id === id);
   if (!group) return bad("Community not found.", 404);
@@ -96,11 +151,17 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
     if (!screening.allowed) return bad(screening.reason, 422);
     if (body.action === "post") {
-      // Rich post — composer parity with the global feed.
+      // P2: every user-supplied URL (attachments, GIFs, event links) is
+      // validated and rejected before persistence; posterUrl is derived from
+      // the already-validated attachment list.
       const rawMediaUrls = body.media_urls ?? body.mediaUrls;
-      const mediaUrls = Array.isArray(rawMediaUrls)
-        ? rawMediaUrls.filter((url): url is string => typeof url === "string" && url.length > 0).slice(0, 4)
-        : [];
+      const validatedMedia = Array.isArray(rawMediaUrls)
+        ? validateMediaUrlList(rawMediaUrls)
+        : { ok: true as const, urls: [] };
+      if (!validatedMedia.ok) return bad(validatedMedia.reason, 422);
+      const mediaUrls = validatedMedia.urls;
+      const validatedGif = validateOptionalUrl(body.gif_url);
+      if (!validatedGif.ok) return bad(validatedGif.reason, 422);
       const kind = body.type === "poll" ? "poll" : body.type === "event" ? "event" : "standard";
       const audienceScope = body.audience_scope ?? body.audience;
       const audience = audienceScope === "Everyone" || audienceScope === "Members Only" ? audienceScope : "Community Only";
@@ -129,6 +190,8 @@ export async function POST(req: NextRequest, { params }: Params) {
         if (Number.isNaN(eventDate.getTime())) return bad("Enter a valid event date and time.");
         const capacity = eventInput.capacity ?? null;
         if (capacity !== null && (!Number.isInteger(capacity) || capacity < 2)) return bad("Event capacity must be at least 2.");
+        const validatedLink = validateOptionalUrl(eventInput?.link);
+        if (!validatedLink.ok) return bad(validatedLink.reason, 422);
         event = {
           title: eventInput.title.trim(),
           date: eventDate.toISOString(),
@@ -140,7 +203,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           category: eventInput.category,
           attendeeIds: [],
           posterUrl: mediaUrls[0] ?? null,
-          link: eventInput.link || undefined,
+          link: validatedLink.url ?? undefined,
         };
       }
 
@@ -171,10 +234,14 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (!mine) return bad("Join this community to vote.", 403);
     const post = group.posts.find((entry) => entry.id === body.postId);
     if (!post?.poll) return bad("Poll not found.", 404);
+    // Audit 3E: parity with the main-feed poll expiry check (posts/[id]).
+    const pollDuration = Number(post.poll.duration);
+    if (pollDuration > 0 && Date.now() >= new Date(post.createdAt).getTime() + pollDuration * 86400000) return bad("This poll has ended.");
     const poll = post.poll;
     const selected = Array.isArray(body.options) ? body.options.filter((id): id is string => poll.options.some((option) => option.id === id)) : [];
     if (selected.length === 0) return bad("Choose a valid poll option.");
     if (!poll.multipleChoice && selected.length > 1) return bad("This poll allows one choice per person.");
+    if (poll.options.some((option) => option.votes.includes(me.id)) && !poll.multipleChoice) return bad("You have already voted in this poll.");
     for (const option of poll.options) {
       if (selected.includes(option.id) && !option.votes.includes(me.id)) option.votes.push(me.id);
     }
@@ -190,7 +257,11 @@ export async function POST(req: NextRequest, { params }: Params) {
     const attendees = post.event.attendeeIds ?? (post.event.attendeeIds = []);
     const index = attendees.indexOf(me.id);
     if (index >= 0) attendees.splice(index, 1);
-    else attendees.push(me.id);
+    else {
+      // Audit 3E: parity with the main-feed capacity check (posts/[id]).
+      if (post.event.capacity && attendees.length >= post.event.capacity) return bad("This event is at capacity.");
+      attendees.push(me.id);
+    }
     await persist(db);
     return json({ ok: true, going: index < 0 });
   }

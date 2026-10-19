@@ -1,10 +1,15 @@
 import { json, requireUser, toPublicUser, withSettings } from "@/lib/server";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import type { NextRequest } from "next/server";
 import type { SuggestedUser } from "@/lib/schema";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
+  // Audit 3F: people suggestions are scrape-prone; throttle per user.
+  const limit = await rateLimit(req, "suggestions", me.id, 60, 60);
+  if (!limit.allowed) return rateLimitResponse(limit.retryAfter);
 
   const connectedIds = new Set(
     db.connections

@@ -1,0 +1,3 @@
+-- Local development seed (no seed data yet).
+-- Configured in supabase/config.toml ([db.seed] sql_paths = ["./seed.sql"]).
+-- Add idempotent seed INSERTs for local development here when needed.

@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { json, requireUser, toPublicUser, withSettings } from "@/lib/server";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 /**
  * GET /api/users/search?q= — global user search for starting new chats.
@@ -10,6 +11,9 @@ export async function GET(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
+  // Audit 3F: directory-style search is scrape-prone; throttle per user.
+  const limit = await rateLimit(req, "user-search", me.id, 60, 60);
+  if (!limit.allowed) return rateLimitResponse(limit.retryAfter);
 
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim().toLowerCase();
   if (!q) return json({ users: [] });

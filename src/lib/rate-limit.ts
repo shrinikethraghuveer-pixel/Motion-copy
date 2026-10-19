@@ -8,10 +8,30 @@ const memoryLimits = (localState.__motionRateLimits ??= new Map());
 let warnedAboutRedis = false;
 
 function clientAddress(request: NextRequest): string {
-  // Trusted deployment proxies overwrite x-real-ip; forwarded-for is the fallback.
-  return request.headers.get("x-real-ip")
-    || request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim()
-    || "unknown";
+  // Audit P5: forwarding headers are client-tweakable, so a forged header must
+  // never become the rate-limit identity. Only a platform-controlled signal is
+  // trusted:
+  //  - Vercel (deployment documented in README) overwrites x-forwarded-for with
+  //    the real client IP, so the leftmost entry is platform-controlled there.
+  //  - Other hosts must declare their trusted proxy header explicitly via
+  //    MOTION_TRUSTED_RL_HEADER (e.g. "x-real-ip" set by the edge load
+  //    balancer). Leftmost/whole value is used.
+  //  - Trusted signal present → include it in the key (per-IP splitting).
+  //  - No trusted signal → "unknown": attacker-supplied headers are ignored
+  //    (they cannot rotate buckets), and all users share the per-actor key
+  //    instead. Legitimate traffic stays functional; only IP granularity is
+  //    lost, never availability.
+  const explicit = process.env.MOTION_TRUSTED_RL_HEADER?.trim().toLowerCase();
+  if (explicit === "!none") return "unknown";
+  const headerName = explicit || (process.env.VERCEL ? "x-forwarded-for" : "");
+  if (headerName) {
+    const raw = request.headers.get(headerName);
+    if (raw) {
+      const value = headerName === "x-forwarded-for" ? (raw.split(",")[0]?.trim() ?? "") : raw.trim();
+      if (value) return value;
+    }
+  }
+  return "unknown";
 }
 
 async function checkRedis(key: string, limit: number, windowSeconds: number): Promise<{ allowed: boolean; retryAfter: number }> {
@@ -55,6 +75,13 @@ export async function rateLimit(request: NextRequest, scope: string, actorId: st
   const now = Date.now();
   const current = memoryLimits.get(key);
   if (!current || current.resetAt <= now) {
+    // Local-dev memory store: opportunistically drop expired entries so a
+    // flood of distinct keys cannot grow the map without bound (audit P8).
+    if (memoryLimits.size > 10_000) {
+      for (const [expiredKey, entry] of memoryLimits) {
+        if (entry.resetAt <= now) memoryLimits.delete(expiredKey);
+      }
+    }
     memoryLimits.set(key, { count: 1, resetAt: now + windowSeconds * 1000 });
     return { allowed: true, retryAfter: windowSeconds };
   }

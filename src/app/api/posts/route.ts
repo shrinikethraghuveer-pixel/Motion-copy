@@ -5,14 +5,14 @@ import { newId } from "@/lib/session";
 import type { Post } from "@/lib/schema";
 import { screenUserText } from "@/lib/moderation";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { validateMediaUrlList } from "@/lib/url-validation";
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
   const { searchParams } = new URL(req.url);
-  const tab = searchParams.get("tab") ?? "for-you";
-  const authorHandle = searchParams.get("author");
+  const tab = searchParams.get("tab") ?? "for-you";  const authorHandle = searchParams.get("author");
   const communityId = searchParams.get("community");
 
   const author = authorHandle ? db.users.find((u) => u.handle === authorHandle) : null;
@@ -56,6 +56,9 @@ export async function GET(req: NextRequest) {
   }
 
   list.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+  // Bounded result set (audit P8); `limit` is honored up to a hard cap.
+  const limit = Math.min(Math.max(Number(searchParams.get("limit")) || 50, 1), 100);
+  list = list.slice(0, limit);
   return NextResponse.json({ posts: list.map((p) => hydratePost(db, p, me.id)) });
 }
 
@@ -77,7 +80,12 @@ export async function POST(req: NextRequest) {
 
   const text = (body.text ?? "").trim();
   const media = body.media ?? null;
-  const mediaUrls = Array.isArray(body.mediaUrls) ? body.mediaUrls.filter((url): url is string => typeof url === "string").slice(0, 4) : [];
+  // Server-side validation (P2): scheme/credentials/length/count checks before persistence.
+  const validatedMedia = Array.isArray(body.mediaUrls)
+    ? validateMediaUrlList(body.mediaUrls)
+    : { ok: true as const, urls: [] };
+  if (!validatedMedia.ok) return bad(validatedMedia.reason, 422);
+  const mediaUrls = validatedMedia.urls;
   const postKind = body.type === "poll" ? "poll" : body.type === "event" || body.type === "opportunity" ? "event" : "text";
   if (postKind === "poll" && !(body.poll?.question ?? "").trim()) return bad("Add a question to your poll.");
   if (!text && !media && mediaUrls.length === 0 && postKind === "text") return bad("Add something to post - text, a visual, or both.");

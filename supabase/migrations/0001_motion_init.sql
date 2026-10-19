@@ -9,10 +9,17 @@ create table if not exists public.profiles (
   id          uuid primary key references auth.users (id) on delete cascade,
   username    text not null unique,
   full_name   text,
+  display_name text,       -- preferred public name (falls back to full_name in the UI) — schema.sql:23
   avatar_url  text,
   bio         text,
   created_at  timestamptz not null default timezone('utc'::text, now())
 );
+
+-- For databases created from an earlier 0001 (without display_name) and the
+-- live database; a no-op on a fresh chain where the column comes via the
+-- create table above. Source: supabase/schema.sql line 23.
+alter table public.profiles
+  add column if not exists display_name text;
 
 -- ------------------------------------------------------------------- posts --
 create table if not exists public.posts (
@@ -25,6 +32,48 @@ create table if not exists public.posts (
   replies_count int  not null default 0,
   created_at    timestamptz not null default timezone('utc'::text, now())
 );
+
+-- ============================================================= ai_generations
+-- Audit/history of every Groq completion, scoped strictly to its owner.
+-- (Byte-for-byte from supabase/schema.sql:74. The app reads this table via
+-- src/lib/db/schema-types.ts; the consolidated schema defines it but no
+-- migration did, so a fresh chain lacked it.)
+create table if not exists public.ai_generations (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references public.profiles (id) on delete cascade,
+  prompt     text not null,
+  response   text not null,
+  model_used text not null default 'openai/gpt-oss-20b',
+  created_at timestamptz not null default timezone('utc'::text, now())
+);
+
+create index if not exists ai_generations_user_created_idx
+  on public.ai_generations (user_id, created_at desc);
+
+-- ai_generations: strictly owner-only, for both reads and writes. -------------
+-- (No public policy at all => invisible to everyone but the owner.)
+alter table public.ai_generations enable row level security;
+
+drop policy if exists "ai_generations_select_own" on public.ai_generations;
+create policy "ai_generations_select_own"
+  on public.ai_generations for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "ai_generations_insert_own" on public.ai_generations;
+create policy "ai_generations_insert_own"
+  on public.ai_generations for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "ai_generations_update_own" on public.ai_generations;
+create policy "ai_generations_update_own"
+  on public.ai_generations for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "ai_generations_delete_own" on public.ai_generations;
+create policy "ai_generations_delete_own"
+  on public.ai_generations for delete
+  using (auth.uid() = user_id);
 
 -- --------------------------------------------- automated profile creation --
 -- Seeds public.profiles whenever a user registers via Supabase Auth.

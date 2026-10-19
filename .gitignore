@@ -21,6 +21,10 @@ Thumbs.db
 # Local logs and development data
 .freebuff/dev.log
 data/db.json
+data/db.json.corrupt-*
+data/db.json.pre-remediation-*
+data/db.json.pre-password-reset-*
+data/db.json.tmp-*
 
 # Downloaded college datasets (local only)
 College-ALL COLLEGE.xlsx

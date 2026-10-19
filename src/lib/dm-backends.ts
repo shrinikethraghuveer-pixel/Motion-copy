@@ -2,6 +2,7 @@
 
 import { api, post, type PublicUser } from "@/lib/client";
 import { hasSupabaseEnv } from "@/lib/db/supabase-env";
+import { validateOptionalUrl } from "@/lib/url-validation";
 import type { ChatMessage } from "@/lib/schema";
 
 /* ───────────────────────────── types ───────────────────────────── */
@@ -57,12 +58,16 @@ export async function searchUsers(q: string): Promise<PublicUser[]> {
     try {
       const { createClient } = await import("@/lib/supabase/client");
       const sb = createClient();
-      const like = `%${query.replace(/[%_]/g, "")}%`;
-      const { data, error } = await sb
-        .from("profiles")
-        .select("id,username,full_name,display_name,avatar_url")
-        .or(`username.ilike.${like},full_name.ilike.${like}`)
-        .limit(10);
+      const myId = await currentUserId(sb);
+      if (!myId) throw new Error("Sign in to search students.");
+      // Discovery, blocking, deactivation, and anonymity rules are enforced by
+      // the `search_discoverable_profiles` RLS helper (migration 0015): a
+      // direct profiles query cannot read user_settings.campus_discovery
+      // (owner-only by RLS) and listed undiscoverable users and self.
+      const { data, error } = await sb.rpc("search_discoverable_profiles", {
+        p_search_text: query.replace(/[%_]/g, ""),
+        p_result_limit: 10,
+      });
       if (error) throw new Error(error.message);
       const rows = (data ?? []) as Array<{
         id: string;
@@ -287,6 +292,11 @@ export interface CreateGroupInput {
 }
 
 export async function createGroup(input: CreateGroupInput): Promise<string> {
+  // P2: mirrored validation — group chats write directly through RLS in
+  // Supabase mode, so the browser plane enforces the same URL rules the API
+  // route (legacy mode) already does.
+  const avatar = validateOptionalUrl(input.avatarUrl);
+  if (!avatar.ok) throw new Error(avatar.reason);
   if (hasSupabaseEnv()) {
     try {
       const sb = await sbClient();
@@ -338,6 +348,17 @@ export async function addGroupMembers(groupId: string, memberIds: string[]): Pro
       const have = new Set(((existing ?? []) as Array<{ user_id: string }>).map((m) => m.user_id));
       const fresh = memberIds.filter((id) => !have.has(id));
       if (fresh.length === 0) return 0;
+      // Prefer the governed RPC (0014/0017): admin-authorized, block-checked,
+      // atomic. When the function is not deployed yet the policy error is a
+      // missing-function error and we fall back to the direct (gated-by-0014) insert.
+      const { data: added, error: rpcError } = await sb.rpc("invite_group_members", {
+        p_group_id: groupId,
+        p_member_ids: fresh,
+      });
+      if (!rpcError) return typeof added === "number" ? added : fresh.length;
+      if (!/function .*invite_group_members.* is not a function|could not find function|not find the function/i.test(rpcError.message)) {
+        throw new Error(rpcError.message);
+      }
       const { error } = await sb
         .from("group_members")
         .insert(fresh.map((user_id) => ({ group_id: groupId, user_id, role: "member" as const })));

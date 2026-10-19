@@ -4,7 +4,9 @@ import { bad, persist, readBody, requireUser, toPublicUser } from "@/lib/server"
 import { newId } from "@/lib/session";
 import type { ChatMessage, DmGroup } from "@/lib/schema";
 import { screenUserText } from "@/lib/moderation";
+import { isBlockedBetween, MAX_DM_GROUP_MEMBERS } from "@/lib/group-governance";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { validateOptionalUrl } from "@/lib/url-validation";
 
 /** Shape returned in the sidebar list (no message bodies). */
 interface GroupSummary {
@@ -90,18 +92,42 @@ export async function POST(req: NextRequest) {
   const action = body.action ?? "create";
 
   if (action === "create") {
+    const avatar = validateOptionalUrl(body.avatar_url ?? body.avatarUrl);
+    if (!avatar.ok) return bad(avatar.reason, 422);
     const name = (body.name ?? "").trim().slice(0, 60);
     if (!name) return bad("Group name is required.");
     const description = (body.description ?? "").trim().slice(0, 280);
-    const avatarUrl = (body.avatar_url ?? body.avatarUrl)?.trim() || null;
-    const memberIds = [...new Set((body.member_ids ?? body.memberIds ?? []).filter((id) => id !== me.id && db.users.some((u) => u.id === id)))];
+    // Server-side metadata screening (audit P3): the same narrow abuse-screening
+    // rules the composer uses — group names/descriptions are not a place for
+    // abusive content. Rejections are content-safety only, no ideological
+    // filtering.
+    const screening = screenUserText([name, description].filter(Boolean).join(" "));
+    if (!screening.allowed) return bad(screening.reason, 422);
+    const requestedIds = [...new Set((body.member_ids ?? body.memberIds ?? []))];
+    // 403 (not the bare 400) so membership-cap denials read like the other
+    // governance denials instead of a generic validation error.
+    if (requestedIds.length > MAX_DM_GROUP_MEMBERS) return bad(`Group chats are limited to ${MAX_DM_GROUP_MEMBERS} members.`, 403);
+    // Membership/block governance (audit P3): a group chat must not place the
+    // creator in a conversation with someone they blocked (or who blocked
+    // them), and invites must go to active accounts only.
+    const memberIds = requestedIds.filter((id) => {
+      if (id === me.id) return false;
+      const member = db.users.find((u) => u.id === id);
+      return Boolean(member) && !member?.deactivatedAt && !isBlockedBetween(db, me.id, id);
+    });
+    if (memberIds.length !== requestedIds.length) {
+      const rejectedNames = requestedIds
+        .filter((id) => !memberIds.includes(id))
+        .map((id) => db.users.find((u) => u.id === id)?.handle ?? id);
+      return bad(`Some members couldn't be invited (blocked or unavailable): ${rejectedNames.join(", ")}.`, 403);
+    }
 
     const now = new Date().toISOString();
     const group: DmGroup = {
       id: newId("gc"),
       name,
       description,
-      avatarUrl,
+      avatarUrl: avatar.url,
       createdBy: me.id,
       members: [
         { userId: me.id, role: "admin", joinedAt: now },
@@ -135,13 +161,30 @@ export async function POST(req: NextRequest) {
   if (action === "addMembers") {
     const g = body.groupId ? findMine(db, body.groupId, me.id) : undefined;
     if (!g) return bad("Group not found.", 404);
+    // Authorization (audit P3): the member-add UI is admins-only, and the
+    // server now enforces the same rule against forged requests.
+    const myRole = g.members.find((m) => m.userId === me.id)?.role;
+    if (myRole !== "admin") return bad("Only group admins can add members.", 403);
+    const requestedIds = [...new Set(body.memberIds ?? [])];
+    if (requestedIds.length > MAX_DM_GROUP_MEMBERS) return bad(`Group chats are limited to ${MAX_DM_GROUP_MEMBERS} members.`, 403);
+    for (const userId of requestedIds) {
+      const member = db.users.find((u) => u.id === userId);
+      if (!member || member.deactivatedAt) return bad(`That member is unavailable: ${userId}.`, 404);
+      // Blocked-with-any-current-member check (audit P3): the candidate may
+      // not join a conversation that already contains someone they blocked
+      // (or who blocked them).
+      if (isBlockedBetween(db, me.id, userId) || g.members.some((m) => m.userId !== userId && isBlockedBetween(db, m.userId, userId))) {
+        return bad("You can't add someone who is blocked with a current member.", 403);
+      }
+    }
     const now = new Date().toISOString();
     let added = 0;
-    for (const userId of body.memberIds ?? []) {
-      if (!db.users.some((u) => u.id === userId) || g.members.some((m) => m.userId === userId)) continue;
+    for (const userId of requestedIds) {
+      if (g.members.some((m) => m.userId === userId)) continue;
       g.members.push({ userId, role: "member", joinedAt: now });
       added += 1;
     }
+    if (g.members.length > MAX_DM_GROUP_MEMBERS) return bad(`Group chats are limited to ${MAX_DM_GROUP_MEMBERS} members.`, 403);
     if (added > 0) g.updatedAt = now;
     await persist(db);
     return NextResponse.json({ ok: true, added });

@@ -62,7 +62,14 @@ alter table public.posts
     check (post_type in ('text', 'event', 'poll')),
   add column if not exists event_details jsonb,
   add column if not exists poll_details jsonb,
-  add column if not exists media_urls text[] not null default '{}';
+  add column if not exists media_urls text[] not null default '{}',
+  -- Columns present on the live database (added out-of-band); recorded here so
+  -- a fresh install matches the live schema that migration 0012's policy uses.
+  add column if not exists audience_scope character varying,
+  add column if not exists gif_url text,
+  add column if not exists poll_data jsonb,
+  add column if not exists event_data jsonb,
+  add column if not exists group_id uuid;
 
 -- ============================================================= ai_generations
 -- Audit/history of every Groq completion, scoped strictly to its owner.
@@ -359,11 +366,13 @@ create policy "group_chats_select_members"
   on public.group_chats for select
   using (exists (select 1 from public.group_members gm where gm.group_id = id and gm.user_id = auth.uid()));
 
--- Any authenticated user can create a group; admins can update it.
-drop policy if exists "group_chats_insert_own" on public.group_chats;
-create policy "group_chats_insert_own"
+-- Anyone authenticated can create a group row directly (pre-0014 live state
+-- restored byte-for-byte from supabase/migrations/0014 rollback capture).
+drop policy if exists "Authenticated users can create group chats" on public.group_chats;
+create policy "Authenticated users can create group chats"
   on public.group_chats for insert
-  with check (auth.uid() = created_by);
+  to public
+  with check (auth.role() = 'authenticated'::text);
 
 drop policy if exists "group_chats_update_admin" on public.group_chats;
 create policy "group_chats_update_admin"
@@ -371,22 +380,41 @@ create policy "group_chats_update_admin"
   using (exists (select 1 from public.group_members gm where gm.group_id = id and gm.user_id = auth.uid() and gm.role = 'admin'))
   with check (exists (select 1 from public.group_members gm where gm.group_id = id and gm.user_id = auth.uid() and gm.role = 'admin'));
 
--- Members read the roster; members may add others; anyone may leave (delete own row).
-drop policy if exists "group_members_select_members" on public.group_members;
-create policy "group_members_select_members"
-  on public.group_members for select
-  using (user_id = auth.uid() or exists (select 1 from public.group_members gm where gm.group_id = group_id and gm.user_id = auth.uid()));
+-- Members read the roster via the recursive membership check (the RLS
+-- recursion pattern 0013 fixes; byte-for-byte from the 0013 rollback capture).
+drop policy if exists "Users can view members of their groups" on public.group_members;
+create policy "Users can view members of their groups"
+  on public.group_members
+  as permissive
+  for select
+  to public
+  using (
+    exists (
+      select 1
+      from public.group_members gm
+      where gm.group_id = group_members.group_id
+        and gm.user_id = auth.uid()
+    )
+  );
 
-drop policy if exists "group_members_insert_members" on public.group_members;
-create policy "group_members_insert_members"
-  on public.group_members for insert
-  with check (exists (select 1 from public.group_members gm where gm.group_id = group_id and gm.user_id = auth.uid()));
+-- Pre-0014 live membership INSERT policy, byte-for-byte from the 0014
+-- rollback capture (auth.role() check; the policy 0014 tightens).
+drop policy if exists "Group admins/creators can add members" on public.group_members;
+create policy "Group admins/creators can add members"
+  on public.group_members
+  as permissive
+  for insert
+  to public
+  with check (auth.role() = 'authenticated'::text);
 
 drop policy if exists "group_members_delete_own" on public.group_members;
 create policy "group_members_delete_own"
   on public.group_members for delete
   using (user_id = auth.uid()
-    or exists (select 1 from public.group_members gm where gm.group_id = group_id and gm.user_id = auth.uid() and gm.role = 'admin'));
+    -- outer reference qualified: a bare `group_id` inside this subquery binds
+    -- to the alias `gm` first and normalizes to gm.group_id = gm.group_id
+    -- (always true). Matches migration 0018.
+    or exists (select 1 from public.group_members gm where gm.group_id = group_members.group_id and gm.user_id = auth.uid() and gm.role = 'admin'));
 
 -- messages: allow group rows — receiver_id becomes nullable and group_id links
 -- to group_chats. Idempotent upgrades for databases that ran the earlier file.
@@ -400,30 +428,47 @@ create policy "messages_select_participants"
   on public.messages for select
   using (
     auth.uid() in (sender_id, receiver_id)
-    or (group_id is not null and exists (
-      select 1 from public.group_members gm where gm.group_id = group_id and gm.user_id = auth.uid()
+    -- outer reference qualified: a bare `group_id` inside this subquery binds
+    -- to the alias `gm` first and normalizes to gm.group_id = gm.group_id
+    -- (always true). Matches migration 0018.
+    or (messages.group_id is not null and exists (
+      select 1 from public.group_members gm where gm.group_id = messages.group_id and gm.user_id = auth.uid()
     ))
   );
 
+-- Pre-0013 live INSERT policies, byte-for-byte from the 0013 rollback
+-- capture: a sender-only bypass ("Users can send messages") OR-combined with
+-- the DM/group-membership rule. 0013 removes the sender-only policy.
 drop policy if exists "messages_insert_own" on public.messages;
-create policy "messages_insert_own"
-  on public.messages for insert
+
+drop policy if exists "Users can send messages" on public.messages;
+create policy "Users can send messages"
+  on public.messages
+  as permissive
+  for insert
+  to public
+  with check (auth.uid() = sender_id);
+
+drop policy if exists "Users can send DM or group messages" on public.messages;
+create policy "Users can send DM or group messages"
+  on public.messages
+  as permissive
+  for insert
+  to public
   with check (
     auth.uid() = sender_id
     and (
-      group_id is not null
-      or (receiver_id is not null and sender_id <> receiver_id)
+      receiver_id is not null
+      or (
+        group_id is not null
+        and exists (
+          select 1
+          from public.group_members
+          where group_members.group_id = messages.group_id
+            and group_members.user_id = auth.uid()
+        )
+      )
     )
-  );
-
--- Sender may send to a group they belong to: also enforce membership.
-drop policy if exists "messages_insert_group_member" on public.messages;
-create policy "messages_insert_group_member"
-  on public.messages for insert
-  with check (
-    auth.uid() = sender_id
-    and group_id is not null
-    and exists (select 1 from public.group_members gm where gm.group_id = group_id and gm.user_id = auth.uid())
   );
 
 create index if not exists messages_group_created_idx on public.messages (group_id, created_at desc);
@@ -539,6 +584,11 @@ returns boolean language sql stable security definer set search_path=public as $
       )
     );
 $$;
+-- NOTE: public.search_discoverable_profiles is intentionally NOT defined in
+-- this baseline -- it is created by migration 0015 over this exact schema.
+-- The browser discovery/search path (src/lib/dm-backends.ts) depends on it
+-- and stays unavailable until 0012-0017 have been replayed on a fresh clone.
+
 create or replace function public.delete_my_account()
 returns boolean language plpgsql security definer set search_path=public,auth as $$
 begin
@@ -606,9 +656,24 @@ drop policy if exists "profiles_select_visible" on public.profiles;
 create policy "profiles_select_visible" on public.profiles for select using(public.can_view_profile(id,auth.uid()));
 drop policy if exists "posts_select_public" on public.posts;
 drop policy if exists "posts_select_visible" on public.posts;
-create policy "posts_select_visible" on public.posts for select using(public.can_view_profile(user_id,auth.uid())
-  and not exists(select 1 from public.user_blocks b where (b.blocker_id=auth.uid() and b.blocked_id=user_id) or (b.blocker_id=user_id and b.blocked_id=auth.uid()))
-  and not exists(select 1 from public.user_mutes m where m.muter_id=auth.uid() and m.muted_id=user_id));
+-- Sole permissive SELECT policy on posts. Blocks are enforced inside
+-- can_view_profile (both directions); mute is viewer-specific feed filtering.
+-- Audience rules: NULL/unknown scope fails closed; 'Everyone' without a group
+-- is public; any group post requires membership. See migration 0012.
+create policy "posts_select_visible" on public.posts for select to public using(
+  (
+    lower(posts.audience_scope) = 'everyone'
+    and posts.group_id is null
+    and public.can_view_profile(posts.user_id,auth.uid())
+    and not exists(select 1 from public.user_mutes m where m.muter_id=auth.uid() and m.muted_id=posts.user_id)
+  )
+  or (
+    posts.group_id is not null
+    and lower(posts.audience_scope) in ('everyone','community only','members only')
+    and exists(select 1 from public.group_members gm where gm.group_id = posts.group_id and gm.user_id = auth.uid())
+    and public.can_view_profile(posts.user_id,auth.uid())
+    and not exists(select 1 from public.user_mutes m where m.muter_id=auth.uid() and m.muted_id=posts.user_id)
+  ));
 
 insert into storage.buckets(id,name,public) values('avatars','avatars',true) on conflict(id) do nothing;
 insert into storage.buckets(id,name,public) values('banners','banners',true) on conflict(id) do nothing;

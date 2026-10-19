@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isAdminEmail } from "@/lib/admin";
 import { readBody, requireUser } from "@/lib/server";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { getCurrentUser } from "@/lib/session";
 import { createAdminClient, hasAdminClientConfig } from "@/lib/supabase/admin";
 import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
@@ -12,12 +13,20 @@ type AdminContext =
   | { mode: "denied"; status: 401 | 403 };
 
 async function getAdminContext(): Promise<AdminContext> {
+  // Audit P0-3: when Supabase is configured, admin authorization requires a
+  // VERIFIED Supabase identity. Legacy local-store identity (whose email is
+  // display data the account controls) can never mint an admin here — so a
+  // user cannot self-assign an admin email and escalate.
   if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
     const supabase = await createSupabaseServerClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (user) return isAdminEmail(user.email) ? { mode: "supabase", userId: user.id } : { mode: "denied", status: 403 };
+    return { mode: "denied", status: 401 };
   }
 
+  // Supabase is not configured (local-only deployment): operator-managed
+  // legacy admins remain supported. Emails can only be installed by editing
+  // the data store directly — no API can set or change an email.
   const auth = await requireUser();
   if ("res" in auth) return { mode: "denied", status: 401 };
   const current = await getCurrentUser();
@@ -46,6 +55,22 @@ function storageObjectFromUrl(rawUrl: string): { bucket: string; path: string } 
   }
 }
 
+/**
+ * Audit P2 residual: reported media URLs are stored values that predate URL
+ * validation. They are rendered as clickable links in the staff queue, so
+ * anything that is not a plain https link is stripped from the response
+ * (the raw value stays in the DB for moderation tooling that uses it).
+ */
+function safeReportMediaUrl(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl || !/^https:\/\//i.test(rawUrl.trim())) return null;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    return parsed.username || parsed.password ? null : parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 async function removeStorageUrl(admin: ReturnType<typeof createAdminClient>, url: string | null | undefined) {
   if (!url) return;
   const object = storageObjectFromUrl(url);
@@ -69,9 +94,11 @@ export async function GET() {
 
   if (context.mode === "local") {
     const db = await readDB();
+    // Bounded queue (audit P8): mirror the Supabase mode's 100-report cap.
     const reports = db.reports
       .slice()
       .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
+      .slice(0, 100)
       .map((report) => {
         const post = report.targetType === "post" ? db.posts.find((item) => item.id === report.targetId) : null;
         const target = report.targetType === "user" ? db.users.find((item) => item.id === report.targetId) : null;
@@ -124,8 +151,8 @@ export async function GET() {
       status: report.status,
       createdAt: report.created_at,
       reporter: reporter?.username ?? "unknown",
-      target: target ? { handle: target.username, name: target.display_name ?? target.username, userId: target.id, mediaUrl: target.avatar_url, bannerUrl: target.banner_url ?? target.cover_url }
-        : post ? { handle: author?.username ?? "unknown", name: author?.display_name ?? author?.username ?? "Unknown user", userId: post.user_id, text: post.content, mediaUrl: post.media_url }
+      target: target ? { handle: target.username, name: target.display_name ?? target.username, userId: target.id, mediaUrl: safeReportMediaUrl(target.avatar_url), bannerUrl: safeReportMediaUrl(target.banner_url ?? target.cover_url) }
+        : post ? { handle: author?.username ?? "unknown", name: author?.display_name ?? author?.username ?? "Unknown user", userId: post.user_id, text: post.content, mediaUrl: safeReportMediaUrl(post.media_url) }
           : null,
     };
   }) });
@@ -134,6 +161,10 @@ export async function GET() {
 export async function PATCH(request: NextRequest) {
   const context = await getAdminContext();
   if (context.mode === "denied") return denied(context);
+  // Defense in depth: admin writes mutate content/accounts; bound the rate
+  // even though the caller is staff.
+  const adminRate = await rateLimit(request, "admin-action", context.userId, 30, 60);
+  if (!adminRate.allowed) return rateLimitResponse(adminRate.retryAfter);
   const body = await readBody<{ reportId?: string; action?: "dismiss" | "remove_media" | "remove_content" | "suspend_user" | "delete_user" }>(request);
   if (!body.reportId || !body.action) return NextResponse.json({ error: "Missing report action." }, { status: 400 });
 

@@ -15,11 +15,12 @@ type Member = PublicUser & { role: string };
 type Reply = { id: string; text: string; createdAt: string; author: PublicUser };
 type DiscussionPoll = {
   question: string;
-  options: Array<{ id: string; text: string; votes: string[] }>;
+  options: Array<{ id: string; text: string; voteCount: number; myVote: boolean }>;
   duration: string;
   multipleChoice: boolean;
   hideResults: boolean;
   totalVotes: number;
+  hasVoted: boolean;
 };
 type DiscussionEvent = {
   title: string;
@@ -30,7 +31,8 @@ type DiscussionEvent = {
   durationMinutes?: number;
   capacity?: number | null;
   category?: string;
-  attendeeIds?: string[];
+  attendeeCount: number;
+  rsvpdByMe: boolean;
   posterUrl?: string | null;
   link?: string;
 };
@@ -405,10 +407,9 @@ export default function CommunityPage() {
 
               {/* Event card */}
               {item.event && (() => {
-                const attendees = item.event!.attendeeIds ?? [];
-                const going = me ? attendees.includes(me.id) : false;
-                const capacity = item.event!.capacity ?? null;
-                const isFull = capacity !== null && attendees.length >= capacity;
+                const going = item.event.rsvpdByMe;
+                const capacity = item.event.capacity ?? null;
+                const isFull = capacity !== null && item.event.attendeeCount >= capacity;
                 return (
                   <div className="mt-3 overflow-hidden rounded-xl border border-violet-500/25 bg-violet-500/[.06]">
                     {item.event!.posterUrl && (/^data:image\//.test(item.event!.posterUrl) || /\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(item.event!.posterUrl)) && <img src={item.event!.posterUrl} alt="" className="h-36 w-full object-cover" />}
@@ -417,7 +418,7 @@ export default function CommunityPage() {
                       <div className="mt-2 space-y-1 text-xs text-zinc-400">
                         <p className="flex items-center gap-1.5"><Clock size={12} />{new Date(item.event!.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}{item.event!.durationMinutes ? ` · ${item.event!.durationMinutes} min` : ""}</p>
                         <p className="flex items-center gap-1.5"><MapPin size={12} />{item.event!.location}</p>
-                        {capacity !== null && <p className="flex items-center gap-1.5"><Users size={12} />{attendees.length} going{capacity ? ` · ${capacity} spots` : ""}</p>}
+                        {capacity !== null && <p className="flex items-center gap-1.5"><Users size={12} />{item.event.attendeeCount} going{capacity ? ` · ${capacity} spots` : ""}</p>}
                       </div>
                       {isMember && <button disabled={busy} onClick={() => void rsvpEvent(item)} className={`mt-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:opacity-40 ${going ? "border border-violet-500/40 bg-violet-500/15 text-violet-200" : "bg-violet-600 text-white hover:bg-violet-500"}`}><Check size={12} />{going ? "You're going" : isFull ? "Event full" : "I'm going"}</button>}
                     </div>
@@ -429,7 +430,7 @@ export default function CommunityPage() {
               {item.poll && (() => {
                 const poll = item.poll!;
                 const mySelection = votedPolls[item.id] ?? [];
-                const hasVoted = mySelection.length > 0 || (me ? poll.options.some((option) => option.votes.includes(me.id)) : false);
+                const hasVoted = mySelection.length > 0 || poll.hasVoted;
                 const pollEnded = poll.duration !== "0" && Date.now() > new Date(new Date(item.createdAt).getTime() + Number(poll.duration) * 86400000).getTime();
                 const showResults = !poll.hideResults || hasVoted || pollEnded;
                 return (
@@ -437,7 +438,7 @@ export default function CommunityPage() {
                     <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Vote size={14} className="text-violet-300" />{poll.question}</h3>
                     <div className="space-y-2">
                       {poll.options.map((option) => {
-                        const count = option.votes.length;
+                        const count = option.voteCount;
                         const pct = poll.totalVotes ? Math.round((count / poll.totalVotes) * 100) : 0;
                         const chosen = mySelection.includes(option.id);
                         return (

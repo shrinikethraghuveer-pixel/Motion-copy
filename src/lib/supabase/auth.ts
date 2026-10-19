@@ -109,19 +109,19 @@ export async function signInWithEmail(
   const identifier = emailOrUsername.trim();
   let email = identifier;
 
-  // Supabase password auth accepts an email address. Resolve a Motion username
-  // server-side so the login UI can accept either form without exposing auth
-  // users or a service-role key to the browser.
+  // Supabase password auth accepts an email address.
   if (!identifier.includes("@")) {
+    // Audit 3A: usernames are resolved and signed in entirely server-side
+    // (the endpoint sets the session cookies itself). The private Auth email
+    // never travels through the browser.
     try {
       const response = await fetch("/api/auth/resolve-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: identifier.replace(/^@+/, "") }),
+        body: JSON.stringify({ username: identifier.replace(/^@+/, ""), password }),
       });
-      const payload = (await response.json().catch(() => ({}))) as { email?: string };
-      if (!response.ok || !payload.email) return { error: "Invalid username or password." };
-      email = payload.email;
+      if (!response.ok) return { error: "Invalid username or password." };
+      return { error: null };
     } catch {
       return { error: "We couldn't sign you in right now. Please try again." };
     }

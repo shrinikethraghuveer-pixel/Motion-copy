@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { bad, json, persist, readBody, requireUser, shouldNotify, toPublicUser, withSettings } from "@/lib/server";
 import { newId } from "@/lib/session";
 import type { Notification } from "@/lib/schema";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
 
 async function syncSupabaseConnection(action:"pending"|"accepted"|"remove",targetHandle:string){
@@ -53,6 +54,9 @@ export async function POST(req: NextRequest) {
   const auth = await requireUser();
   if ("res" in auth) return auth.res;
   const { me, db } = auth;
+  // Audit P4: connection writes were previously unthrottled.
+  const rate = await rateLimit(req, "connection-write", me.id, 10, 60);
+  if (!rate.allowed) return rateLimitResponse(rate.retryAfter);
   const body = await readBody<{ targetId?: string; targetHandle?: string; action?: "connect" | "accept" | "remove" }>(req);
 
   const target = db.users.find((u) => u.id === body.targetId || u.handle === body.targetHandle);

@@ -5,6 +5,8 @@ import { readDB, writeDB, serialize } from "@/lib/db";
 
 const COOKIE = "motion_session";
 const DEVELOPMENT_USER_ID = "u_maya";
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const SESSION_MAX_AGE_MS = SESSION_MAX_AGE_SECONDS * 1000;
 
 /** Human label for the User-Agent — powers the Active Sessions list. */
 export function describeDevice(ua: string): string {
@@ -32,7 +34,8 @@ export async function setSession(userId: string): Promise<void> {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: SESSION_MAX_AGE_SECONDS,
+    secure: process.env.NODE_ENV === "production",
   });
 }
 
@@ -54,24 +57,21 @@ export async function clearSession(): Promise<void> {
   jar.delete(COOKIE);
 }
 
-/** Current user id or null. Validates the cookie against the store (legacy plain-userId cookies still work). */
+/** Current user id or null. Only server-issued `s_` session tokens resolve to a user. */
 export async function getSessionUserId(): Promise<string | null> {
   const jar = await cookies();
   const v = jar.get(COOKIE)?.value;
   // Keep local route previews usable without requiring a login. This is never
   // enabled in a production build, and uses a seeded user that APIs can resolve.
   if (!v) return process.env.NODE_ENV === "development" ? DEVELOPMENT_USER_ID : null;
+  if (!v.startsWith("s_")) return null;
   const db = await readDB();
-  let userId: string | null = null;
-  if (v.startsWith("s_")) {
-    const s = db.sessions.find((x) => x.token === v);
-    if (!s) return null;
-    userId = s.userId;
-  } else {
-    userId = v; // legacy cookie from before sessions existed
-  }
-  const user = db.users.find((u) => u.id === userId);
-  return user && !user.deactivatedAt ? userId : null;
+  const s = db.sessions.find((x) => x.token === v);
+  if (!s) return null;
+  const createdMs = Date.parse(s.createdAt);
+  if (!Number.isFinite(createdMs) || Date.now() - createdMs > SESSION_MAX_AGE_MS) return null;
+  const user = db.users.find((u) => u.id === s.userId);
+  return user && !user.deactivatedAt ? s.userId : null;
 }
 
 /** Fresh copy of the signed-in user, or null. */

@@ -40,27 +40,23 @@ export async function GET(request: Request) {
         const excluded = new Set<string>([user.id]);
         for (const link of links ?? []) excluded.add(link.requester_id === user.id ? link.target_id : link.requester_id);
 
-        const { data: candidates, error: candidateError } = await supabase
-          .from("profiles")
-          .select("id,username,full_name,display_name,avatar_url")
-          .neq("id", user.id)
-          .order("created_at", { ascending: false })
-          .limit(Math.max(limit * 5, 25));
+        // Discovery, blocking, and deactivation policy is enforced by the
+        // search_discoverable_profiles RLS helper (migration 0015), which the
+        // local fallback mirrors via the discoverable filter below. An empty
+        // search text matches every eligible profile.
+        const { data: discovered, error: candidateError } = await supabase.rpc(
+          "search_discoverable_profiles",
+          { p_search_text: "", p_result_limit: Math.max(limit * 5, 25) }
+        );
         if (candidateError) throw candidateError;
 
-        const users = (candidates ?? []).filter((profile) => !excluded.has(profile.id)).slice(0, limit);
-        if (users.length >= 3) return NextResponse.json({ users: asSuggested(users) }, { status: 200 });
+        const candidates = ((discovered ?? []) as ProfileRow[]).filter((profile) => !excluded.has(profile.id)).slice(0, limit);
+        if (candidates.length >= 3) return NextResponse.json({ users: asSuggested(candidates) }, { status: 200 });
 
         // Sparse unconnected candidates are common for new communities. Keep
         // the widget useful by relaxing only the connection exclusion.
-        const { data: fallback, error: fallbackError } = await supabase
-          .from("profiles")
-          .select("id,username,full_name,display_name,avatar_url")
-          .neq("id", user.id)
-          .order("created_at", { ascending: false })
-          .limit(limit);
-        if (fallbackError) throw fallbackError;
-        return NextResponse.json({ users: asSuggested(fallback ?? []) }, { status: 200 });
+        const relaxed = ((discovered ?? []) as ProfileRow[]).slice(0, limit);
+        return NextResponse.json({ users: asSuggested(relaxed) }, { status: 200 });
       }
     } catch (error) {
       console.warn("[users/suggested] Supabase query failed; using local profiles", error);
@@ -72,8 +68,17 @@ export async function GET(request: Request) {
     if (link.requesterId === me.id) excluded.add(link.targetId);
     if (link.targetId === me.id) excluded.add(link.requesterId);
   }
+  // Local fallback mirrors /api/users/search: discoverable + not deactivated
+  // + no block in either direction.
+  const mySettings = withSettings(me);
   const available = db.users
-    .filter((profile) => !profile.deactivatedAt && withSettings(profile).discoverable)
+    .filter((profile) => {
+      if (profile.deactivatedAt) return false;
+      const us = withSettings(profile);
+      if (!us.discoverable) return false;
+      if (us.blocked.includes(me.id) || mySettings.blocked.includes(profile.id)) return false;
+      return true;
+    })
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
   const mutualCount = (candidateId: string) => {
     const mine = new Set(db.connections.filter((link) => link.status === "accepted" && (link.requesterId === me.id || link.targetId === me.id)).map((link) => link.requesterId === me.id ? link.targetId : link.requesterId));

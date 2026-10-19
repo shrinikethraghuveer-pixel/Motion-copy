@@ -70,8 +70,7 @@ function EventMetaCard({ post, onChange }: { post: FeedPost; onChange: (p: FeedP
   const { me } = useSession();
   const ev = post.event!;
   const saved = post.savedByMe;
-  const attendees = ev.attendeeIds ?? [];
-  const attending = Boolean(me && attendees.includes(me.id));
+  const attending = Boolean(me && ev.rsvpdByMe);
   const [busy, setBusy] = useState(false);
   return (
     <div className="mt-3 rounded-2xl border border-gold/25 bg-gold-soft/40 p-4">
@@ -82,7 +81,7 @@ function EventMetaCard({ post, onChange }: { post: FeedPost; onChange: (p: FeedP
             <span>{eventDateLabel(ev.date)}</span><span className="text-gold/80">{eventCountdown(ev.date)}</span>
             <span className="flex items-center gap-1"><MapPin size={11} /> {ev.location}</span>
             {ev.durationMinutes && <span>{ev.durationMinutes >= 60 ? `${ev.durationMinutes / 60}h` : `${ev.durationMinutes}m`}</span>}
-            <span>{attendees.length}{ev.capacity ? ` / ${ev.capacity}` : ""} attending</span>
+            <span>{ev.attendeeCount}{ev.capacity ? ` / ${ev.capacity}` : ""} attending</span>
           </div>
         </div>
         <div className="flex shrink-0 flex-col gap-1.5">
@@ -124,13 +123,11 @@ function MediaGrid({ urls }: { urls: string[] }) {
 }
 
 function PollCard({ post, onChange }: { post: FeedPost; onChange: (p: FeedPost) => void }) {
-  const { me } = useSession();
   const { toast } = useUI();
   const poll = post.poll!;
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const voterIds = [...new Set(poll.options.flatMap((option) => option.votes))];
-  const hasVoted = Boolean(me && voterIds.includes(me.id));
+  const hasVoted = poll.hasVoted;
   const expiresAt = poll.duration === "0" ? null : new Date(new Date(post.createdAt).getTime() + Number(poll.duration) * 86400000);
   const pollEnded = Boolean(expiresAt && expiresAt.getTime() <= Date.now());
   const showResults = !poll.hideResults || hasVoted || pollEnded;
@@ -149,10 +146,10 @@ function PollCard({ post, onChange }: { post: FeedPost; onChange: (p: FeedPost) 
       <h3 className="mb-3 font-semibold text-ink">{poll.question}</h3>
       <div className="space-y-2">
         {poll.options.map((option) => {
-          const count = option.votes.length;
+          const count = option.voteCount;
           const pct = poll.totalVotes ? Math.round((count / poll.totalVotes) * 100) : 0;
           const chosen = selected.includes(option.id);
-          const myVote = Boolean(me && option.votes.includes(me.id));
+          const myVote = option.myVote;
           return (
             <button key={option.id} disabled={hasVoted || busy} onClick={() => poll.multipleChoice ? setSelected((v) => chosen ? v.filter((id) => id !== option.id) : [...v, option.id]) : void vote([option.id])} className={`relative w-full overflow-hidden rounded-xl border px-3 py-2.5 text-left text-sm ${chosen || myVote ? "border-violet-400/60" : "border-edge"}`}>
               {showResults && <motion.span initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.45 }} className="absolute inset-y-0 left-0 bg-zinc-500/20" />}
@@ -165,7 +162,7 @@ function PollCard({ post, onChange }: { post: FeedPost; onChange: (p: FeedPost) 
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-mist">
         <span>{poll.totalVotes} vote{poll.totalVotes === 1 ? "" : "s"}</span>
         <span>{poll.duration === "0" ? "No expiration" : `Ends in ${poll.duration} day${poll.duration === "1" ? "" : "s"}`}</span>
-        {hasVoted && <span className="rounded-full border border-ice/20 bg-ice/10 px-2 py-1 text-ice">Voted by @{me?.handle} and {Math.max(0, voterIds.length - 1)} others</span>}
+        {hasVoted && <span className="rounded-full border border-ice/20 bg-ice/10 px-2 py-1 text-ice">You voted</span>}
       </div>
     </div>
   );
@@ -357,7 +354,7 @@ export default function PostCard({ post, onChange, onOpenProfile }: { post: Feed
           className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 transition hover:bg-coral/10 ${post.likedByMe ? "text-coral" : "hover:text-coral"}`}
         >
           <Heart size={16} className={post.likedByMe ? "fill-coral heart-pop" : ""} />
-          {post.likes.length > 0 && <motion.span key={post.likes.length} initial={{ y: 5, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 500, damping: 24 }}>{post.likes.length}</motion.span>}
+          {post.likesCount > 0 && <motion.span key={post.likesCount} initial={{ y: 5, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 500, damping: 24 }}>{post.likesCount}</motion.span>}
         </motion.button>
         <motion.button
           onClick={() => act("repost")}
@@ -368,7 +365,7 @@ export default function PostCard({ post, onChange, onOpenProfile }: { post: Feed
           className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 transition hover:bg-ice/10 ${post.repostedByMe ? "text-ice" : "hover:text-ice"}`}
         >
           <Repeat2 size={16} />
-          {post.reposts.length > 0 && <motion.span key={post.reposts.length} initial={{ y: 5, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 500, damping: 24 }}>{post.reposts.length}</motion.span>}
+          {post.repostsCount > 0 && <motion.span key={post.repostsCount} initial={{ y: 5, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 500, damping: 24 }}>{post.repostsCount}</motion.span>}
         </motion.button>
         <motion.button
           onClick={() => setCommentsOpen((v) => !v)}

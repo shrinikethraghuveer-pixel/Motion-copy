@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { createHash } from "crypto";
 import { bad, json, persist, readBody, requireUser, withSettings } from "@/lib/server";
 import { clearSession, getSessionToken, newId } from "@/lib/session";
 import { hashPassword, verifyPassword } from "@/lib/auth";
@@ -7,8 +8,19 @@ import { DEFAULT_SETTINGS, GOAL_OPTIONS_MULTI, type Audience, type DB, type Goal
 import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient, type SupabaseClient, type User as SupabaseUser } from "@supabase/supabase-js";
 import { getSupabaseAuth } from "@/lib/supabase/server-auth";
+import { validateOptionalUrl } from "@/lib/url-validation";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type SupabaseRequestAuth = { client: SupabaseClient; user: SupabaseUser };
+
+// Audit 3B: the legacy settings payload used to echo raw Motion session
+// tokens (GET `sessions[].token` + `activeSessionToken`). A token read from
+// the settings response is enough to forge an attacker's cookie for that
+// account. The payload now carries server-computed opaque identifiers only
+// (short SHA-256 prefixes of the token); raw tokens never leave the server.
+function opaqueSessionId(token: string): string {
+  return createHash("sha256").update(token).digest("hex").slice(0, 16);
+}
 
 /** Verify the browser's Supabase token for sensitive writes independently of
  * the legacy JSON-store session. The client retains this token only in memory
@@ -53,6 +65,15 @@ async function persistSupabaseSettings(body: Record<string, unknown>, settings: 
       if (typeof body.currentlyInEducationalInstitution === "boolean") profilePatch.currently_in_educational_institution = body.currentlyInEducationalInstitution;
       profilePatch.onboarding_completed = true;
     } else {
+      // P2: validate URL-bearing fields before they reach the persist step.
+      if (typeof body.avatarUrl === "string") {
+        const avatar = validateOptionalUrl(body.avatarUrl);
+        if (!avatar.ok) return avatar.reason;
+      }
+      if ("bannerUrl" in body) {
+        const banner = validateOptionalUrl(body.bannerUrl);
+        if (!banner.ok) return banner.reason;
+      }
       for (const [source, target] of [["username","username"],["name","display_name"],["bio","bio"],["school","school"],["phone","phone"],["avatarUrl","avatar_url"]]) {
         if (source in body) profilePatch[target] = body[source];
       }
@@ -196,7 +217,7 @@ async function getSupabaseSettingsPayload() {
   const related=ids.length?await supabase.from("profiles").select("id,username,display_name").in("id",ids):{data:[]};
   const people=related.data??[];
   const map=(id:string)=>{const person=people.find(p=>p.id===id);return person?{id,handle:person.username,name:person.display_name??person.username}:null;};
-  return {profile:{id:user.id,handle:profile.username,name:profile.display_name??profile.full_name??profile.username,headline:"",school:profile.school??"",photo:profile.avatar_url,banner:profile.banner_url??profile.cover_url,bio:profile.bio??"",email:user.email??null,phone:profile.phone??null,createdAt:profile.created_at},settings,blocked:(br??[]).map(x=>map(x.blocked_id)).filter(Boolean),muted:(mr??[]).map(x=>map(x.muted_id)).filter(Boolean),sessions:[],loginEvents:[],activeSessionToken:null,plan:{tier:"free",price:0,renewsAt:null,imageLimit:1,textLimit:500},version:"1.0.0"};
+  return {profile:{id:user.id,handle:profile.username,name:profile.display_name??profile.full_name??profile.username,headline:"",school:profile.school??"",photo:profile.avatar_url,banner:profile.banner_url??profile.cover_url,bio:profile.bio??"",email:user.email??null,phone:profile.phone??null,createdAt:profile.created_at},settings,blocked:(br??[]).map(x=>map(x.blocked_id)).filter(Boolean),muted:(mr??[]).map(x=>map(x.muted_id)).filter(Boolean),sessions:[],loginEvents:[],activeSessionId:null,plan:{tier:"free",price:0,renewsAt:null,imageLimit:1,textLimit:500},version:"1.0.0"};
 }
 
 function validateSupabaseSettingsBody(body:Record<string,unknown>):string|null {
@@ -257,7 +278,7 @@ export async function GET(req: NextRequest) {
   const sessions = db.sessions
     .filter((x) => x.userId === me.id)
     .sort((a, b) => +new Date(b.lastSeenAt) - +new Date(a.lastSeenAt))
-    .map((x) => ({ token: x.token, device: x.device, createdAt: x.createdAt, lastSeenAt: x.lastSeenAt }));
+    .map((x) => ({ id: opaqueSessionId(x.token), device: x.device, createdAt: x.createdAt, lastSeenAt: x.lastSeenAt }));
 
   const loginEvents = db.loginEvents
     .filter((x) => x.userId === me.id)
@@ -305,7 +326,7 @@ export async function GET(req: NextRequest) {
     muted,
     sessions,
     loginEvents,
-    activeSessionToken: await getSessionToken(),
+    activeSessionId: opaqueSessionId((await getSessionToken()) ?? ""),
     plan: { tier: "free", price: 0, renewsAt: null, imageLimit: 1, textLimit: 500 },
     version: "1.0.0",
   });
@@ -314,6 +335,11 @@ export async function GET(req: NextRequest) {
 /* ---------- PATCH /api/settings — one endpoint, sectioned payloads ---------- */
 
 export async function PATCH(req: NextRequest) {
+  // Audit P4: settings writes rewrite profile state; bound the write rate.
+  // Actor granularity comes from the platform IP signal (rate-limit.ts); the
+  // per-actor key keeps treating fields separately (auth paths checked below).
+  const settingsRate = await rateLimit(req, "settings-write", "anon", 30, 60);
+  if (!settingsRate.allowed) return rateLimitResponse(settingsRate.retryAfter);
   const body = await readBody<Record<string, unknown>>(req);
   // Completion is exclusively a Supabase-authenticated operation. This must
   // happen before consulting the legacy session, otherwise a real browser
@@ -369,21 +395,30 @@ export async function PATCH(req: NextRequest) {
   if (typeof body.bio === "string") me.bio = body.bio.trim().slice(0, 300);
   if (typeof body.school === "string") me.school = body.school.trim().slice(0, 120);
   if (typeof body.headline === "string") me.headline = body.headline.trim().slice(0, 80);
-  if (typeof body.email === "string") {
-    const email = body.email.trim();
-    if (email && !/^\S+@\S+\.\S+$/.test(email)) return bad("That email doesn't look valid.");
-    me.email = email || undefined;
-  }
+  // Audit P0-3: body.email is ignored on the legacy branch. An account's own
+  // email must never become a self-minted admin credential; legacy emails are
+  // display-only data installed by the operator. Senders of legacy email
+  // fields (none in the shipped UI) just get a no-op on that key.
   if (typeof body.phone === "string") {
     const phone=body.phone.trim();
     if(phone.length>32)return bad("Phone number must be 32 characters or fewer.");
     me.phone=phone||undefined;
   }
-  if (typeof body.avatarUrl === "string") me.photo = body.avatarUrl || undefined;
-  if (typeof body.bannerUrl === "string") me.banner = body.bannerUrl || undefined;
+  if (typeof body.avatarUrl === "string") {
+    const avatar = validateOptionalUrl(body.avatarUrl);
+    if (!avatar.ok) return bad(avatar.reason, 422);
+    me.photo = avatar.url ?? undefined;
+  }
+  if (typeof body.bannerUrl === "string") {
+    const banner = validateOptionalUrl(body.bannerUrl);
+    if (!banner.ok) return bad(banner.reason, 422);
+    me.banner = banner.url ?? undefined;
+  }
   if (typeof body.photo === "string") {
     if (body.photo.length > 300_000) return bad("Photo is too large — pick something under ~200KB.", 413);
-    me.photo = body.photo || undefined;
+    const photo = validateOptionalUrl(body.photo);
+    if (!photo.ok) return bad(photo.reason, 422);
+    me.photo = photo.url ?? undefined;
   }
   if (Array.isArray(body.skills)) {
     const skills = (body.skills as unknown[])
@@ -470,6 +505,10 @@ export async function PATCH(req: NextRequest) {
     const pw = body.newPassword;
     if (pw.length < 8) return bad("Password must be at least 8 characters.");
     me.passwordHash = hashPassword(pw);
+    // Audit 3B: a credential change invalidates every OTHER Motion session of
+    // this user (standard session hygiene; the current session stays signed in).
+    const currentToken = (await getSessionToken()) ?? "";
+    db.sessions = db.sessions.filter((x) => x.userId !== me.id || x.token === currentToken);
   }
 
   // --- Security: 2FA & passkeys ---
@@ -538,11 +577,15 @@ export async function PATCH(req: NextRequest) {
 /* ---------- POST /api/settings — actions ---------- */
 
 export async function POST(req: NextRequest) {
+  // Audit P4: block/unblock/mute/deactivate rewrite the safety lists and
+  // account state; bound the write rate like PATCH.
+  const settingsRate = await rateLimit(req, "settings-write", "anon", 30, 60);
+  if (!settingsRate.allowed) return rateLimitResponse(settingsRate.retryAfter);
   const auth = await requireUser();
   const body = await readBody<{
     action?: string;
     handle?: string;
-    token?: string;
+    id?: string;
     hours?: number;
     text?: string;
     confirmed?: boolean;
@@ -620,9 +663,11 @@ export async function POST(req: NextRequest) {
       return json({ ok: true, muted: s.muted });
     }
     case "revoke-session": {
-      if (body.token === (await getSessionToken())) return bad("You can't revoke the session you're using right now.");
+      if (typeof body.id !== "string") return bad("Session id is required.");
+      const curToken = (await getSessionToken()) ?? "";
+      if (opaqueSessionId(curToken) === body.id) return bad("You can't revoke the session you're using right now.");
       const before = db.sessions.length;
-      db.sessions = db.sessions.filter((x) => !(x.userId === me.id && x.token === body.token));
+      db.sessions = db.sessions.filter((x) => !(x.userId === me.id && opaqueSessionId(x.token) === body.id));
       if (db.sessions.length === before) return bad("Session not found.", 404);
       await persist(db);
       return json({ ok: true });

@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { requireUser, withSettings } from "@/lib/server";
+import type { NextRequest } from "next/server";
+import type { SupabaseClient, User as SupabaseUser } from "@supabase/supabase-js";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { bad, requireUser, withSettings } from "@/lib/server";
 import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -17,11 +20,39 @@ export async function GET() {
 }
 
 /**
- * POST /api/ai/stream — proxies a chat completion to Groq and streams
- * the response back as Server-Sent Events tokens. The GROQ_API_KEY stays
- * server-side; the browser only ever talks to this route.
+ * POST /api/ai/stream — requires a verified identity, either a local
+ * `motion_session` (preferred) or a server-verified Supabase session via
+ * `auth.getUser()`. Applies a per-actor rate limit, then proxies a chat
+ * completion to Groq and streams the response back as Server-Sent Events
+ * tokens. The GROQ_API_KEY stays server-side; the browser only ever talks
+ * to this route.
  */
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const localAuth = await requireUser();
+  const localMe = "me" in localAuth ? localAuth.me : null;
+
+  let actorId: string | null = localMe?.id ?? null;
+  let supabaseClient: SupabaseClient | null = null;
+  let supabaseActor: SupabaseUser | null = null;
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    try {
+      const supabase = await createSupabaseServerClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        supabaseClient = supabase;
+        supabaseActor = user;
+        if (!actorId) actorId = user.id;
+      }
+    } catch { /* fall through to the local app session store */ }
+  }
+
+  if (!actorId) {
+    return bad("Not signed in.", 401);
+  }
+
+  const rate = await rateLimit(req, "ai-stream", actorId, 10, 60);
+  if (!rate.allowed) return rateLimitResponse(rate.retryAfter);
+
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
@@ -36,23 +67,16 @@ export async function POST(req: Request) {
   let prompt = "";
   let context = "";
   let model = MODEL;
-  let hasSupabasePreference=false;
-  if(process.env.NEXT_PUBLIC_SUPABASE_URL&&process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY){
+  let hasSupabasePreference = false;
+  if (supabaseActor && supabaseClient) {
     try {
-      const supabase=await createSupabaseServerClient();
-      const {data:{user}}=await supabase.auth.getUser();
-      if(user){
-        const {data}=await supabase.from("user_settings").select("ai_default_model").eq("user_id",user.id).maybeSingle();
-        if(data?.ai_default_model&&["openai/gpt-oss-20b","openai/gpt-oss-120b"].includes(data.ai_default_model)){model=data.ai_default_model;hasSupabasePreference=true;}
-      }
+      const { data } = await supabaseClient.from("user_settings").select("ai_default_model").eq("user_id", supabaseActor.id).maybeSingle();
+      if (data?.ai_default_model && ["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(data.ai_default_model)) { model = data.ai_default_model; hasSupabasePreference = true; }
     } catch { /* fall through to the local app session store */ }
   }
-  if(!hasSupabasePreference){
-    const auth = await requireUser();
-    if (!("res" in auth)) {
-      const preference = withSettings(auth.me).aiDefaultModel;
-      if (["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(preference)) model = preference;
-    }
+  if (!hasSupabasePreference && localMe) {
+    const preference = withSettings(localMe).aiDefaultModel;
+    if (["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(preference)) model = preference;
   }
   try {
     const body = (await req.json()) as { prompt?: string; context?: string };
@@ -90,9 +114,11 @@ export async function POST(req: Request) {
     });
 
     if (!upstream.ok || !upstream.body) {
-      const detail = await upstream.text().catch(() => "");
+      // Only the status is kept on the server; the upstream body can echo
+      // prompt content and must not be forwarded to the client.
+      console.error("[ai-stream] upstream request failed", upstream.status);
       return NextResponse.json(
-        { error: `Groq request failed (${upstream.status}).`, detail: detail.slice(0, 300) },
+        { error: `AI request failed (${upstream.status}). Please try again shortly.` },
         { status: 502 }
       );
     }

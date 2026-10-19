@@ -78,7 +78,7 @@ test("raw user-ID cookies are rejected", async (t) => {
 test("invalid session tokens are rejected", async (t) => {
   await t.test("s_ token not present in the store", async () => {
     freshDB();
-    cookie("s_deadbeefdeadbeefdeadbeef");
+    cookie("s_synthetic-absent-token");
     assert.equal(await getSessionUserId(), null);
   });
 

@@ -71,6 +71,15 @@ export async function POST(req: NextRequest) {
   if (body.mode === "demo" && process.env.NODE_ENV === "production") {
     return NextResponse.json({ error: "Demo login is disabled in production." }, { status: 403 });
   }
+  // Audit P2-2: the legacy signup branch writes to the local JSON store — a
+  // legacy/dev-only plane. Production accounts come from the Supabase flow
+  // (CoreAuthCard / auth-modal → signUpWithEmail). Deny before any store
+  // access so no legacy account, password hash, or login event can be
+  // created, and so signup spam cannot consume the shared production
+  // login-attempt buckets.
+  if (process.env.NODE_ENV === "production" && body.mode !== "login") {
+    return NextResponse.json({ error: "Legacy signup is disabled in production." }, { status: 403 });
+  }
   // Audit P4: credential endpoints. Two buckets — per attempted handle
   // (protects a single victim account from targeted brute force) and one
   // shared-IP bucket (rate-limit.ts resolves the trusted platform signal; on

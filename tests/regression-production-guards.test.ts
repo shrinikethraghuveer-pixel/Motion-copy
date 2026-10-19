@@ -2,6 +2,8 @@
  * Audit P0-1 regression: production must never expose or honor the local
  * demo/dev conveniences — demo login (password "demo" for any seeded account),
  * the demo-handle listing, or the no-cookie development identity fallback.
+ * Audit P2-2 regression: the legacy signup branch is likewise production-
+ * disabled (no store mutation, no session) while dev behavior is preserved.
  * Runs against the route handlers + requireUser with the shared db-stub.
  */
 import { test } from "node:test";
@@ -10,7 +12,7 @@ import assert from "node:assert/strict";
 Object.assign(process.env, { NODE_ENV: "test" });
 
 import { asNextRequest, baseSession, globals, localUser, makeJar } from "./helpers/route-test.ts";
-import { resetDB, setReadDBError } from "./stubs/db-stub.mjs";
+import { resetDB, setReadDBError, getDB } from "./stubs/db-stub.mjs";
 
 const { GET: sessionGET, POST: sessionPOST } = (await import("@/app/api/session/route")) as unknown as {
   GET: () => Promise<Response>;
@@ -194,4 +196,83 @@ test("a missing/corrupt local data store fails closed with a clear 503", async (
       setReadDBError(null);
     }
   });
+});
+
+// ---- P2-2: legacy signup guard ----
+
+test("legacy signup is hard-disabled in production before any store access", async () => {
+  installJar();
+  const snapshot = JSON.parse(JSON.stringify({ users: [localUser("u_maya", "mayacodes", { deactivatedAt: null })], connections: [], sessions: [], loginEvents: [] }));
+  resetDB(fixtureDB());
+  const restore = setNodeEnv("production");
+  try {
+    const res = await sessionPOST(sessionRequest({ mode: "signup", handle: "newkid", password: "p-sentinel-123" }));
+    assert.equal(res.status, 403);
+    const body = (await res.json()) as { error?: string };
+    assert.equal(body.error, "Legacy signup is disabled in production.");
+    assert.deepEqual(getDB(), snapshot, "store is untouched: no user, no login event, no session row");
+    assert.equal(jar()?.store.get("motion_session"), undefined, "no legacy session cookie is issued");
+  } finally {
+    restore();
+  }
+});
+
+test("a POST with no mode falls through to signup and is denied in production", async () => {
+  installJar();
+  const snapshot = JSON.parse(JSON.stringify({ users: [localUser("u_maya", "mayacodes", { deactivatedAt: null })], connections: [], sessions: [], loginEvents: [] }));
+  resetDB(fixtureDB());
+  const restore = setNodeEnv("production");
+  try {
+    const res = await sessionPOST(sessionRequest({ handle: "modless", password: "p-sentinel-123" }));
+    assert.equal(res.status, 403);
+    const body = (await res.json()) as { error?: string };
+    assert.equal(body.error, "Legacy signup is disabled in production.");
+    assert.deepEqual(getDB(), snapshot, "modeless requests cannot smuggle a signup");
+  } finally {
+    restore();
+  }
+});
+
+test("development legacy signup still creates a local account (behavior preserved)", async () => {
+  installJar();
+  resetDB(fixtureDB());
+  const restore = setNodeEnv("development");
+  try {
+    const res = await sessionPOST(sessionRequest({ mode: "signup", handle: "devsignup", name: "Dev Signup", password: "p-sentinel-123" }));
+    assert.equal(res.status, 201);
+    const body = (await res.json()) as { user?: { handle?: string } };
+    assert.equal(body.user?.handle, "devsignup");
+    const db = getDB() as unknown as { users: Array<{ handle: string; passwordHash?: string }>; loginEvents: unknown[] };
+    assert.equal(db.users.length, 2);
+    const created = db.users.find((u) => u.handle === "devsignup");
+    assert.ok(created, "the dev account exists in the store");
+    assert.ok(created.passwordHash, "dev password is hashed locally");
+    assert.equal(db.loginEvents.length, 1);
+    assert.match(jar()?.store.get("motion_session") ?? "", /^s_/, "dev session cookie issued");
+  } finally {
+    restore();
+  }
+});
+
+test("production legacy login reaches the rate limiter, not the signup guard", async () => {
+  installJar();
+  resetDB(fixtureDB());
+  const restore = setNodeEnv("production");
+  const prevUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const prevToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+  // Closed localhost port: connection refused immediately, nothing external.
+  Object.assign(process.env, {
+    UPSTASH_REDIS_REST_URL: "http://127.0.0.1:9/rest/v1",
+    UPSTASH_REDIS_REST_TOKEN: "unused",
+  });
+  try {
+    const res = await sessionPOST(sessionRequest({ mode: "login", handle: "mayacodes", password: "whatever" }));
+    assert.equal(res.status, 429, "the fail-closed limiter denies (429); the signup guard (403) must not catch login mode");
+    const body = (await res.json()) as { error?: string };
+    assert.match(body.error ?? "", /Too many requests/);
+  } finally {
+    restore();
+    if (prevUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL; else process.env.UPSTASH_REDIS_REST_URL = prevUrl;
+    if (prevToken === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN; else process.env.UPSTASH_REDIS_REST_TOKEN = prevToken;
+  }
 });
